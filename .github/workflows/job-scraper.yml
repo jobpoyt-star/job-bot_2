@@ -13,7 +13,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -31,8 +31,32 @@ jobs:
       - name: Install Chromium and system dependencies
         run: npx playwright install --with-deps chromium
 
-      - name: Run JOBPOYT scraper once
-        run: npm start
+      - name: Scrape continuously for 30 minutes
+        timeout-minutes: 31
+        run: |
+          window_seconds=1800
+          deadline=$((SECONDS + window_seconds))
+          cycle=0
+
+          while (( SECONDS < deadline )); do
+            cycle=$((cycle + 1))
+            remaining=$((deadline - SECONDS))
+            echo "Starting scraper cycle ${cycle}; ${remaining}s remain in the scraping window"
+
+            set +e
+            timeout --signal=TERM --kill-after=2s "${remaining}s" npm start
+            status=$?
+            set -e
+
+            if (( status == 124 && SECONDS >= deadline )); then
+              echo "30-minute scraping window completed"
+              break
+            fi
+
+            if (( status != 0 )); then
+              exit "$status"
+            fi
+          done
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
