@@ -3,11 +3,7 @@
 const supabase = require('../database/supabaseClient');
 const logger = require('../utils/logger');
 const { createJobEnricher } = require('../ai');
-const { mergeEnrichment } = require('../ai/jobExtractor');
-const { buildEnrichmentPrompt } = require('../ai/promptBuilder');
-const { parseEnrichmentResponse } = require('../ai/responseParser');
-const { callOllama } = require('../ai/ollamaClient');
-const { callGroq, GroqQuotaError } = require('../ai/groqClient');
+const { GroqQuotaError } = require('../ai/groqClient');
 const { publishPendingJobs } = require('../publisher/publisher');
 const { normalizeWorkMode, normalizeJobWorkMode } = require('../utils/workModeNormalizer');
 const { normalizeExperience, normalizeEmploymentType, normalizeLocationForWorkMode } = require('../utils/processedJobNormalizer');
@@ -100,18 +96,20 @@ function isQueueItemReady(queueItem) {
   return Date.now() - updatedAt >= delayMs;
 }
 
-function getAIModel() {
-  const provider = (process.env.AI_PROVIDER || '').toLowerCase().trim();
+function getAIModel(providerOverride) {
+  const provider = String(providerOverride || process.env.AI_PRIMARY_PROVIDER || process.env.AI_PROVIDER || 'gemini')
+    .toLowerCase()
+    .trim();
   if (provider === 'groq') {
-    return process.env.GROQ_MODEL || 'unknown';
+    return process.env.GROQ_MODEL || (providerOverride ? 'openai/gpt-oss-20b' : 'unknown');
   }
   if (provider === 'ollama') {
-    return process.env.OLLAMA_MODEL || 'unknown';
+    return process.env.OLLAMA_MODEL || (providerOverride ? 'gemma3:4b' : 'unknown');
   }
-  return 'unknown';
+  return process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 }
 
-function mapRawJobToProcessedJob(rawJob) {
+function mapRawJobToProcessedJob(rawJob, provider) {
   if (!rawJob || typeof rawJob !== 'object') {
     return null;
   }
@@ -144,7 +142,7 @@ function mapRawJobToProcessedJob(rawJob) {
     status: rawJob.status || 'active',
     is_active: rawJob.is_active !== false,
     ai_processed: true,
-    ai_model: getAIModel(),
+    ai_model: getAIModel(provider),
     ai_processed_at: new Date().toISOString(),
   };
 }
@@ -162,6 +160,8 @@ function buildProcessedJobInsertPayload(processedJobPayload) {
 
 async function runSingleJobDebug(rawJobId, options = {}) {
   const loggerInstance = options.logger || logger;
+  const activeSupabase = options.supabase || supabase;
+  const jobEnricher = options.enrichJob || enrichJob;
   const startedAt = Date.now();
 
   if (!rawJobId) {
@@ -170,7 +170,7 @@ async function runSingleJobDebug(rawJobId, options = {}) {
 
   loggerInstance.info(`AI Worker Debug Mode Started for raw_job_id: ${rawJobId}`);
 
-  const { data: rawJobRows, error: rawJobError } = await supabase
+  const { data: rawJobRows, error: rawJobError } = await activeSupabase
     .from('raw_jobs')
     .select('*')
     .eq('id', rawJobId)
@@ -183,24 +183,15 @@ async function runSingleJobDebug(rawJobId, options = {}) {
   loggerInstance.info('=== ORIGINAL RAW JOB ===');
   loggerInstance.info(JSON.stringify(rawJobRows, null, 2));
 
-  const provider = (process.env.AI_PROVIDER || '').toLowerCase().trim();
-  const providerClient = provider === 'groq' ? (options.groqClient || callGroq) : (options.ollamaClient || callOllama);
-  const prompt = buildEnrichmentPrompt(rawJobRows, [
-    'description', 'summary', 'responsibilities', 'benefits', 'skills', 'experience', 'employment_type', 'salary', 'work_mode',
-  ]);
-
-  const aiResponseText = await providerClient(prompt, { logger: loggerInstance, ...options });
-  const parsedResponse = typeof aiResponseText === 'string'
-    ? parseEnrichmentResponse(aiResponseText)
-    : aiResponseText && typeof aiResponseText === 'object' && !Array.isArray(aiResponseText)
-      ? aiResponseText
-      : parseEnrichmentResponse(String(aiResponseText || ''));
-  const mergedJob = mergeEnrichment(rawJobRows, parsedResponse);
+  const mergedJob = await jobEnricher(rawJobRows, { logger: loggerInstance, ...options });
 
   loggerInstance.info('=== AI RESPONSE ===');
-  loggerInstance.info(typeof aiResponseText === 'string' ? aiResponseText : JSON.stringify(aiResponseText, null, 2));
+  loggerInstance.info(JSON.stringify(mergedJob, null, 2));
 
-  const processedJobPayload = mapRawJobToProcessedJob({ ...rawJobRows, ...mergedJob });
+  const processedJobPayload = mapRawJobToProcessedJob(
+    { ...rawJobRows, ...mergedJob },
+    jobEnricher.getLastSuccessfulProvider?.()
+  );
   if (!processedJobPayload) {
     throw new Error('Processed job payload could not be built');
   }
@@ -211,7 +202,7 @@ async function runSingleJobDebug(rawJobId, options = {}) {
   const insertPayload = buildProcessedJobInsertPayload(processedJobPayload);
 
   if (processedJobPayload.apply_url) {
-    const { data: existingApplyUrlRow, error: existingApplyUrlError } = await supabase
+    const { data: existingApplyUrlRow, error: existingApplyUrlError } = await activeSupabase
       .from('processed_jobs')
       .select('id, raw_job_id')
       .eq('apply_url', processedJobPayload.apply_url)
@@ -238,7 +229,7 @@ async function runSingleJobDebug(rawJobId, options = {}) {
     }
   }
 
-  const { data: insertData, error: insertError } = await supabase
+  const { data: insertData, error: insertError } = await activeSupabase
     .from('processed_jobs')
     .insert(insertPayload);
 
@@ -271,6 +262,8 @@ async function runSingleJobDebug(rawJobId, options = {}) {
 
 async function runAiWorker(options = {}) {
   const loggerInstance = options.logger || logger;
+  const activeSupabase = options.supabase || supabase;
+  const jobEnricher = options.enrichJob || enrichJob;
   const batchSize = options.batchSize || 10;
   const rawJobIds = Array.isArray(options.rawJobIds) ? options.rawJobIds.filter(Boolean) : [];
   const startedAt = Date.now();
@@ -294,10 +287,10 @@ async function runAiWorker(options = {}) {
 
   try {
     if (debugMode) {
-      return runSingleJobDebug(options.rawJobId, options);
+      return runSingleJobDebug(options.rawJobId, { ...options, supabase: activeSupabase, enrichJob: jobEnricher });
     }
-    await recoverStaleProcessing({ logger: loggerInstance, supabase });
-    let query = supabase
+    await recoverStaleProcessing({ logger: loggerInstance, supabase: activeSupabase });
+    let query = activeSupabase
       .from('ai_queue')
       .select('*')
       .eq('status', 'Pending');
@@ -306,7 +299,7 @@ async function runAiWorker(options = {}) {
       query = query.in('raw_job_id', rawJobIds);
     }
 
-    const { count: pendingCount, error: pendingCountError } = await supabase
+    const { count: pendingCount, error: pendingCountError } = await activeSupabase
       .from('ai_queue')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'Pending');
@@ -354,7 +347,7 @@ async function runAiWorker(options = {}) {
         const jobStartedAt = Date.now();
         logAiStage(loggerInstance, 'queue_item_loaded', { id: rawJobId }, jobStartedAt);
 
-        const { data: existingProcessedRows, error: duplicateCheckError } = await supabase
+        const { data: existingProcessedRows, error: duplicateCheckError } = await activeSupabase
           .from('processed_jobs')
           .select('raw_job_id')
           .eq('raw_job_id', rawJobId);
@@ -368,7 +361,7 @@ async function runAiWorker(options = {}) {
 
         if (Array.isArray(existingProcessedRows) && existingProcessedRows.length > 0) {
           loggerInstance.info(`  → Skipping (already processed)\n`);
-          await supabase
+          await activeSupabase
             .from('ai_queue')
             .update({
               status: 'Completed',
@@ -380,7 +373,7 @@ async function runAiWorker(options = {}) {
           continue;
         }
 
-        const { data: rawJobRows, error: rawJobError } = await supabase
+        const { data: rawJobRows, error: rawJobError } = await activeSupabase
           .from('raw_jobs')
           .select('*')
           .eq('id', rawJobId)
@@ -391,7 +384,7 @@ async function runAiWorker(options = {}) {
         }
         logAiStage(loggerInstance, 'raw_job_loaded', rawJobRows, jobStartedAt);
 
-        const { data: claimedQueueRows, error: claimError } = await supabase
+        const { data: claimedQueueRows, error: claimError } = await activeSupabase
           .from('ai_queue')
           .update({
             status: 'Processing',
@@ -419,20 +412,23 @@ async function runAiWorker(options = {}) {
         loggerInstance.info(`  Title: ${rawJobRows.title}`);
         loggerInstance.info(`  Description: ${rawJobRows.description?.substring(0, 50)}...`);
 
-        logAiStage(loggerInstance, 'groq_request_started', rawJobRows, jobStartedAt);
+        logAiStage(loggerInstance, 'ai_request_started', rawJobRows, jobStartedAt);
         const aiTimeoutMs = getAiJobTimeoutMs();
         const remainingAiTimeoutMs = Math.max(1, aiTimeoutMs - (Date.now() - jobStartedAt));
         const aiStartedAt = Date.now();
-        const enrichedJob = await enrichJob(rawJobRows, { timeoutMs: remainingAiTimeoutMs });
+        const enrichedJob = await jobEnricher(rawJobRows, { timeoutMs: remainingAiTimeoutMs, logger: loggerInstance });
         metrics.aiDurationsMs.push(Date.now() - aiStartedAt);
-        logAiStage(loggerInstance, 'groq_response_received', rawJobRows, jobStartedAt);
+        logAiStage(loggerInstance, 'ai_response_received', rawJobRows, jobStartedAt);
         logAiStage(loggerInstance, 'ai_response_parsed', rawJobRows, jobStartedAt);
 
-        loggerInstance.info(`✓ STEP 3: Groq Enrichment Complete`);
+        loggerInstance.info(`✓ STEP 3: AI Enrichment Complete`);
         loggerInstance.info(`  Returned Fields:`, Object.keys(enrichedJob));
         loggerInstance.info(`  Enriched Data:`, enrichedJob);
 
-        const processedJobPayload = mapRawJobToProcessedJob({ ...rawJobRows, ...enrichedJob });
+        const processedJobPayload = mapRawJobToProcessedJob(
+          { ...rawJobRows, ...enrichedJob },
+          jobEnricher.getLastSuccessfulProvider?.()
+        );
 
         if (!processedJobPayload) {
           throw new Error('Processed job payload could not be built');
@@ -449,7 +445,7 @@ async function runAiWorker(options = {}) {
         const insertPayload = buildProcessedJobInsertPayload(processedJobPayload);
 
         if (processedJobPayload.apply_url) {
-          const { data: existingApplyUrlRow, error: existingApplyUrlError } = await supabase
+          const { data: existingApplyUrlRow, error: existingApplyUrlError } = await activeSupabase
             .from('processed_jobs')
             .select('id, raw_job_id')
             .eq('apply_url', processedJobPayload.apply_url)
@@ -465,7 +461,7 @@ async function runAiWorker(options = {}) {
             loggerInstance.info(`  → Existing processed_jobs id: ${existingApplyUrlRow.id}`);
             loggerInstance.info('  → Marking raw job and queue as completed without inserting duplicate processed_job');
 
-            await supabase
+            await activeSupabase
               .from('ai_queue')
               .update({
                 status: 'Completed',
@@ -473,7 +469,7 @@ async function runAiWorker(options = {}) {
               })
               .eq('id', queueItem.id);
 
-            await supabase
+            await activeSupabase
               .from('raw_jobs')
               .update({
                 ai_processed: true,
@@ -487,7 +483,7 @@ async function runAiWorker(options = {}) {
         }
 
         logAiStage(loggerInstance, 'processed_jobs_write_started', rawJobRows, jobStartedAt);
-        const { data: insertData, error: insertError } = await supabase
+        const { data: insertData, error: insertError } = await activeSupabase
           .from('processed_jobs')
           .insert(insertPayload);
         logAiStage(loggerInstance, 'processed_jobs_write_completed', rawJobRows, jobStartedAt);
@@ -503,7 +499,7 @@ async function runAiWorker(options = {}) {
         loggerInstance.info(`  ✓ Successfully inserted`);
 
         logAiStage(loggerInstance, 'ai_queue_status_update_started', rawJobRows, jobStartedAt);
-        const { data: queueUpdateData, error: queueUpdateError } = await supabase
+        const { data: queueUpdateData, error: queueUpdateError } = await activeSupabase
           .from('ai_queue')
           .update({
             status: 'Completed',
@@ -521,7 +517,7 @@ async function runAiWorker(options = {}) {
         loggerInstance.info(`  ✓ Queue item marked completed`);
 
         logAiStage(loggerInstance, 'raw_jobs_ai_processed_update_started', rawJobRows, jobStartedAt);
-        const { data: rawJobUpdateData, error: rawJobUpdateError } = await supabase
+        const { data: rawJobUpdateData, error: rawJobUpdateError } = await activeSupabase
           .from('raw_jobs')
           .update({
             ai_processed: true,
@@ -570,7 +566,7 @@ async function runAiWorker(options = {}) {
           shouldFail = nextRetryCount >= 3;
         }
         
-        const { error: queueFailError } = await supabase
+        const { error: queueFailError } = await activeSupabase
           .from('ai_queue')
           .update({
             status: shouldFail ? 'Failed' : 'Pending',
@@ -626,7 +622,7 @@ async function runAiWorker(options = {}) {
     if (jobsCompleted > 0) {
       loggerInstance.info('✓ Batch complete: publishing pending jobs once');
       try {
-        await publishPendingJobs({ logger: loggerInstance, supabase });
+        await publishPendingJobs({ logger: loggerInstance, supabase: activeSupabase });
         loggerInstance.info('✓ Publisher completed after batch');
       } catch (publishError) {
         loggerInstance.error(`Publisher failed after batch: ${publishError.message}`);

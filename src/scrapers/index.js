@@ -49,13 +49,10 @@ const SCRAPER_REGISTRY = {
   sap: scrapeSapJobs,
 };
 
-const DEFAULT_SCRAPER_ORDER = ['microsoft', 'google','hsbc', 'ibm', 'sap', 'amazon', 'wipro', 'cognizant', 'capgemini', 'infosys', 'deloitte', 'cisco', 'nttdata', 'ltimindtree', 'mphasis', 'persistent'];
+const ACTIVE_SCRAPER_ORDER = [];
 
 function getRegisteredScraperKeys() {
-  const registryKeys = Object.keys(SCRAPER_REGISTRY);
-  const ordered = DEFAULT_SCRAPER_ORDER.filter((key) => registryKeys.includes(key));
-  const extras = registryKeys.filter((key) => !ordered.includes(key));
-  return [...ordered, ...extras];
+  return ACTIVE_SCRAPER_ORDER.filter((key) => Object.hasOwn(SCRAPER_REGISTRY, key));
 }
 
 async function runScrapers(urls = [], options = {}) {

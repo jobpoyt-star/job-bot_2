@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 const { SUPPORTED_COMPANY_NAMES } = require('../database/companyRepository');
 const { buildEnrichmentPrompt } = require('./promptBuilder');
 const { parseEnrichmentResponse } = require('./responseParser');
+const { callGemini } = require('./geminiClient');
 const { callOllama } = require('./ollamaClient');
 const { callGroq } = require('./groqClient');
 
@@ -509,15 +510,29 @@ function normalizeAIResponse(responseText, dependencies = {}) {
   return parseEnrichmentResponse(String(responseText || ''), { logger: loggerInstance });
 }
 
+function isUsableEnrichmentResponse(job, response) {
+  return hasMeaningfulValue(response?.title)
+    && hasMeaningfulValue(response?.description)
+    && shouldUseAIDescription(response.description, job?.description)
+    && hasMeaningfulValue(response?.summary);
+}
+
 async function fetchAIResponseWithRetry(prompt, client, providerName, dependencies = {}) {
   const loggerInstance = dependencies.logger || logger;
   let lastError;
-  const attempts = 2;
+  const configuredAttempts = Number(dependencies.responseAttempts);
+  const attempts = Number.isInteger(configuredAttempts) && configuredAttempts > 0 ? configuredAttempts : 2;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const responseText = await client(prompt, dependencies);
-      return normalizeAIResponse(responseText, dependencies);
+      const parsedResponse = normalizeAIResponse(responseText, dependencies);
+      if (dependencies.requireUsableResponse && !isUsableEnrichmentResponse(dependencies.job, parsedResponse)) {
+        const error = new Error('AI response did not contain usable title, description, and summary fields');
+        error.code = 'INVALID_ENRICHMENT';
+        throw error;
+      }
+      return parsedResponse;
     } catch (error) {
       lastError = error;
       if (attempt === attempts) {
@@ -546,7 +561,7 @@ async function enrichJobWithOllama(job, dependencies = {}) {
 
   try {
     const prompt = buildEnrichmentPrompt(job, missingFields);
-    const parsedResponse = await fetchAIResponseWithRetry(prompt, ollamaClient, 'Ollama', dependencies);
+    const parsedResponse = await fetchAIResponseWithRetry(prompt, ollamaClient, 'Ollama', { ...dependencies, job });
     const mergedJob = mergeEnrichment(job, parsedResponse);
     const elapsedMs = Date.now() - startTime;
     loggerInstance.info(`AI completed in ${elapsedMs}ms`);
@@ -573,7 +588,7 @@ async function enrichJobWithGroq(job, dependencies = {}) {
 
   try {
     const prompt = buildEnrichmentPrompt(job, missingFields);
-    const parsedResponse = await fetchAIResponseWithRetry(prompt, groqClient, 'Groq', dependencies);
+    const parsedResponse = await fetchAIResponseWithRetry(prompt, groqClient, 'Groq', { ...dependencies, job });
     const mergedJob = mergeEnrichment(job, parsedResponse);
     const elapsedMs = Date.now() - startTime;
     loggerInstance.info(`AI completed in ${elapsedMs}ms`);
@@ -581,11 +596,42 @@ async function enrichJobWithGroq(job, dependencies = {}) {
   } catch (error) {
     const elapsedMs = Date.now() - startTime;
     loggerInstance.warn(`AI failed after ${elapsedMs}ms: ${error.message}`);
-    return mergeEnrichment(job, {});
+    throw error;
+  }
+}
+
+async function enrichJobWithGemini(job, dependencies = {}) {
+  const loggerInstance = dependencies.logger || logger;
+  const geminiClient = dependencies.geminiClient || callGemini;
+
+  const missingFields = getMissingFields(job);
+  if (!missingFields.length) {
+    loggerInstance.info('AI skipped: all enrichment fields already populated');
+    return job;
+  }
+
+  const startTime = Date.now();
+  loggerInstance.info(`AI started for ${missingFields.join(', ')}`);
+
+  try {
+    const prompt = buildEnrichmentPrompt(job, missingFields);
+    const parsedResponse = await fetchAIResponseWithRetry(prompt, geminiClient, 'Gemini', {
+      ...dependencies,
+      job,
+      requireUsableResponse: true,
+      responseAttempts: 1,
+    });
+    const mergedJob = mergeEnrichment(job, parsedResponse);
+    loggerInstance.info(`AI completed in ${Date.now() - startTime}ms`);
+    return mergedJob;
+  } catch (error) {
+    loggerInstance.warn(`AI failed after ${Date.now() - startTime}ms: ${error.message}`);
+    throw error;
   }
 }
 
 module.exports = {
+  enrichJobWithGemini,
   enrichJobWithOllama,
   enrichJobWithGroq,
   hasMeaningfulValue,

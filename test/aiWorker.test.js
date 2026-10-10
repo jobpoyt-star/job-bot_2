@@ -2,6 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { mapRawJobToProcessedJob } = require('../src/workers/aiWorker');
 
+function expectedAiModel() {
+  const provider = (process.env.AI_PRIMARY_PROVIDER || process.env.AI_PROVIDER || 'gemini').toLowerCase();
+  if (provider === 'groq') return process.env.GROQ_MODEL || 'unknown';
+  if (provider === 'ollama') return process.env.OLLAMA_MODEL || 'unknown';
+  return process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+}
+
 test('mapRawJobToProcessedJob maps raw job fields into processed job payload', () => {
   const payload = mapRawJobToProcessedJob({
     id: 42,
@@ -27,7 +34,7 @@ test('mapRawJobToProcessedJob maps raw job fields into processed job payload', (
   assert.equal(payload.company_id, 7);
   assert.equal(payload.title, 'Engineer');
   assert.equal(payload.ai_processed, true);
-  assert.equal(payload.ai_model, process.env.GROQ_MODEL || process.env.OLLAMA_MODEL || 'unknown');
+  assert.equal(payload.ai_model, expectedAiModel());
   assert.equal(payload.status, 'active');
   assert.equal(payload.is_active, true);
 });

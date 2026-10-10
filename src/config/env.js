@@ -13,7 +13,6 @@ const {
   PLAYWRIGHT_PAGE_TIMEOUT,
   PLAYWRIGHT_LAUNCH_RETRIES,
   PLAYWRIGHT_LAUNCH_RETRY_DELAY,
-  COMPANY_CAREERS_URLS,
   JOB_SCRAPE_CRON,
   SCRAPER_BATCH_SIZE,
   LOG_LEVEL,
@@ -22,6 +21,10 @@ const {
   JOB_LOOKBACK_DAYS,
   COMPANY_SCRAPER_TIMEOUT_MS,
   SCRAPER_TIMEOUT_MS,
+  AI_PRIMARY_PROVIDER,
+  AI_PROVIDER,
+  GEMINI_MODEL,
+  GEMINI_TIMEOUT,
 } = process.env;
 
 const supabaseUrl = SUPABASE_URL?.trim();
@@ -36,11 +39,12 @@ module.exports = {
   playwrightPageTimeout: Number(PLAYWRIGHT_PAGE_TIMEOUT) || 30000,
   playwrightLaunchRetries: Number(PLAYWRIGHT_LAUNCH_RETRIES) || 3,
   playwrightLaunchRetryDelay: Number(PLAYWRIGHT_LAUNCH_RETRY_DELAY) || 1000,
-  companyCareerUrls:
-    COMPANY_CAREERS_URLS?.split(',').map((value) => value.trim()).filter(Boolean) || [],
   jobScrapeCron: JOB_SCRAPE_CRON || '30 22 * * *',
   scraperBatchSize: Number(SCRAPER_BATCH_SIZE) || 50,
   logLevel: LOG_LEVEL || 'info',
+  aiPrimaryProvider: AI_PRIMARY_PROVIDER || AI_PROVIDER || 'gemini',
+  geminiModel: GEMINI_MODEL || 'gemini-2.5-flash-lite',
+  geminiTimeoutMs: Number(GEMINI_TIMEOUT) || 60000,
   arbeitnowRetentionDays: Number(ARBEITNOW_RETENTION_DAYS) || 7,
   defaultRetentionDays: Number(DEFAULT_RETENTION_DAYS) || 15,
   jobLookbackDays: Number(JOB_LOOKBACK_DAYS) || 3,

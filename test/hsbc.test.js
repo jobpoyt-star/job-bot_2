@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const { buildSearchUrl, normalizeJob, fetchAllSearchJobs } = require('../src/scrapers/hsbc');
 const { getRegisteredScraperKeys } = require('../src/scrapers');
 
-test('HSBC scraper is registered for company-key runs', () => {
-  assert.ok(getRegisteredScraperKeys().includes('hsbc'));
+test('existing company scrapers are disabled as scheduled targets', () => {
+  assert.deepEqual(getRegisteredScraperKeys(), []);
 });
 
 test('HSBC normalizer creates a valid job record from an API position', () => {

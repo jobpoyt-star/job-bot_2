@@ -1,25 +1,10 @@
 const cron = require('node-cron');
 const logger = require('../utils/logger');
-const { companyCareerUrls, scraperBatchSize, jobScrapeCron, companyScraperTimeoutMs } = require('../config/env');
+const { scraperBatchSize, jobScrapeCron, companyScraperTimeoutMs } = require('../config/env');
 const { runScrapers, getRegisteredScraperKeys } = require('../scrapers');
 const { deduplicateJobs } = require('../services/duplicateService');
 const { saveJobs } = require('../database/jobRepository');
 const { runAiWorker } = require('../workers/aiWorker');
-
-let importHclJobs = null;
-let importTcsJobs = null;
-
-try {
-  ({ importHclJobs } = require('../services/jobs/fetchHclJobs'));
-} catch (error) {
-  logger.warn(`HCL import module unavailable: ${error.message}`);
-}
-
-try {
-  ({ importTcsJobs } = require('../services/fetchTcsJobs'));
-} catch (error) {
-  logger.warn(`TCS import module unavailable: ${error.message}`);
-}
 
 const JOB_SCHEDULES = Array.isArray(jobScrapeCron) && jobScrapeCron.length > 0
   ? jobScrapeCron
@@ -48,15 +33,7 @@ function deduplicateScrapedJobs(jobs) {
 }
 
 function resolveScraperTargets() {
-  if (Array.isArray(companyCareerUrls) && companyCareerUrls.length > 0) {
-    return companyCareerUrls;
-  }
-
-  const registeredScrapers = getRegisteredScraperKeys();
-  logger.warn(
-    `COMPANY_CAREERS_URLS is empty; falling back to registered scrapers: ${registeredScrapers.join(',')}`
-  );
-  return registeredScrapers;
+  return getRegisteredScraperKeys();
 }
 
 function logCompanyTiming(target, stats) {
@@ -212,10 +189,7 @@ async function runJobPipeline(options = {}) {
       logger.warn('No registered company scraper targets to run');
     }
 
-    const importSources = [
-      ...(importHclJobs ? [{ name: 'HCLTech', run: importHclJobs }] : []),
-      ...(importTcsJobs ? [{ name: 'TCS', run: importTcsJobs }] : []),
-    ];
+    const importSources = [];
 
     const importSummary = {
       batchCount: 0,
