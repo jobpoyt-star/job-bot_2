@@ -332,6 +332,10 @@ async function insertJobs(jobs) {
   let preparedInsertedCount = 0;
   let preparedUpdatedCount = 0;
   let newInsertApplyUrls = [];
+  let newRawJobIds = [];
+  let aiQueueInserted = 0;
+  let aiQueueInsertFailures = 0;
+  let aiQueueUnverified = 0;
 
   try {
     const applyUrls = preparedJobs
@@ -386,52 +390,53 @@ async function insertJobs(jobs) {
 
     try {
       if (newInsertApplyUrls.length > 0) {
-        const { data: newlyInsertedRawJobs, error: insertedRowsLookupError } = await supabase
-          .from('raw_jobs')
-          .select('id,apply_url')
-          .in('apply_url', newInsertApplyUrls);
+        const newApplyUrlSet = new Set(newInsertApplyUrls);
+        const newlyInsertedRawJobs = insertedRows.filter((row) => newApplyUrlSet.has(row?.apply_url));
+        const insertedRawJobIds = newlyInsertedRawJobs
+          .map((row) => row && row.id)
+          .filter((value) => value != null && value !== '');
+        newRawJobIds = insertedRawJobIds;
 
-        if (!insertedRowsLookupError && Array.isArray(newlyInsertedRawJobs)) {
-          const insertedRawJobIds = (newlyInsertedRawJobs || [])
-            .map((row) => row && row.id)
-            .filter((value) => value != null && value !== '');
+        if (insertedRawJobIds.length > 0) {
+          const { data: existingQueueRows, error: queueLookupError } = await supabase
+            .from('ai_queue')
+            .select('raw_job_id')
+            .in('raw_job_id', insertedRawJobIds);
 
-          if (insertedRawJobIds.length > 0) {
-            const { data: existingQueueRows, error: queueLookupError } = await supabase
-              .from('ai_queue')
-              .select('raw_job_id')
-              .in('raw_job_id', insertedRawJobIds);
+          if (!queueLookupError) {
+            const queuePayloads = buildAiQueuePayloadsForNewRawJobs(
+              newlyInsertedRawJobs,
+              existingQueueRows || []
+            ).map((payload) => ({
+              ...payload,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }));
 
-            if (!queueLookupError) {
-              const queuePayloads = buildAiQueuePayloadsForNewRawJobs(
-                newlyInsertedRawJobs || [],
-                existingQueueRows || []
-              ).map((payload) => ({
-                ...payload,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              }));
+            if (queuePayloads.length > 0) {
+              const { error: queueInsertError } = await supabase
+                .from('ai_queue')
+                .insert(queuePayloads);
 
-              if (queuePayloads.length > 0) {
-                const { error: queueInsertError } = await supabase
-                  .from('ai_queue')
-                  .insert(queuePayloads);
-
-                if (queueInsertError) {
-                  logger.warn(`AI queue creation failed: ${queueInsertError.message}`);
-                } else {
-                  logger.info(`AI queue entries created: ${queuePayloads.length}`);
-                }
+              if (queueInsertError) {
+                aiQueueInsertFailures += queuePayloads.length;
+                logger.warn(`AI queue creation failed: ${queueInsertError.message}`);
+              } else {
+                aiQueueInserted += queuePayloads.length;
+                logger.info(`AI queue entries created: ${queuePayloads.length}`);
               }
-            } else {
-              logger.warn(`AI queue lookup failed: ${queueLookupError.message}`);
             }
+          } else {
+            aiQueueUnverified += insertedRawJobIds.length;
+            logger.warn(`AI queue lookup failed: ${queueLookupError.message}`);
           }
         } else {
-          logger.warn(`AI queue lookup failed: ${insertedRowsLookupError ? insertedRowsLookupError.message : 'Unable to load newly inserted raw jobs'}`);
+          aiQueueUnverified += newInsertApplyUrls.length;
+          logger.warn('AI queue setup could not identify newly persisted raw jobs');
         }
       }
     } catch (queueError) {
+      aiQueueUnverified += Math.max(0, preparedInsertedCount - newRawJobIds.length);
       logger.warn(`AI queue creation failed: ${queueError.message}`);
     }
 
@@ -443,8 +448,12 @@ async function insertJobs(jobs) {
         prepared: preparedJobs.length,
         inserted: insertedCount,
         updated: updatedCount,
-          skippedDuplicates: 0,
+        skippedDuplicates: 0,
         failed: 0,
+        newRawJobIds,
+        aiQueueInserted,
+        aiQueueInsertFailures,
+        aiQueueUnverified,
       },
     };
   } catch (error) {

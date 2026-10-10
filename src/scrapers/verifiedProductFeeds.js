@@ -112,7 +112,7 @@ function normalizeWorkMode(value) {
   return null;
 }
 
-function normalizePosting(posting, company) {
+function normalizePosting(posting, company, metrics) {
   const title = String(posting?.title || '').replace(/\s+/g, ' ').trim();
   const applyUrl = String(posting?.applyUrl || '').trim();
   if (!title || !/^https?:\/\//i.test(applyUrl)) return null;
@@ -137,12 +137,15 @@ function normalizePosting(posting, company) {
     external_job_id: posting.id == null ? applyUrl : String(posting.id),
   };
   const eligibility = evaluateIndiaEligibility(job);
-  if (!eligibility.eligible) return null;
+  if (!eligibility.eligible) {
+    if (metrics) metrics.skippedIndia += 1;
+    return null;
+  }
   job.location = eligibility.persistedLocation;
   return job;
 }
 
-function normalizeGreenhousePosting(job, company) {
+function normalizeGreenhousePosting(job, company, metrics) {
   const location = job?.location;
   const locationName = typeof location === 'string'
     ? location
@@ -154,7 +157,7 @@ function normalizeGreenhousePosting(job, company) {
     country: location?.country || job?.country || null,
     applyUrl: job?.absolute_url,
     postedDate: job?.first_published || null,
-  }, company);
+  }, company, metrics);
 }
 
 function getLeverIndiaLocations(posting) {
@@ -171,7 +174,7 @@ function getLeverIndiaLocations(posting) {
   return { location: categories.location || null, country: posting?.country || null };
 }
 
-function normalizeLeverPosting(posting, company) {
+function normalizeLeverPosting(posting, company, metrics) {
   const categories = posting?.categories || {};
   const location = getLeverIndiaLocations(posting);
   return normalizePosting({
@@ -183,17 +186,17 @@ function normalizeLeverPosting(posting, company) {
     description: posting?.descriptionPlain || posting?.openingPlain || null,
     applyUrl: posting?.applyUrl || posting?.hostedUrl,
     postedDate: posting?.createdAt || null,
-  }, company);
+  }, company, metrics);
 }
 
-function normalizeSwiggyPosting(posting) {
+function normalizeSwiggyPosting(posting, metrics) {
   return normalizePosting({
     id: posting?.u,
     title: posting?.t,
     location: posting?.l,
     employmentType: posting?.e,
     applyUrl: posting?.u,
-  }, 'Swiggy');
+  }, 'Swiggy', metrics);
 }
 
 async function fetchGreenhouseJobs(feed, options = {}) {
@@ -202,21 +205,23 @@ async function fetchGreenhouseJobs(feed, options = {}) {
   const postings = Array.isArray(data?.jobs) ? data.jobs : [];
   const seen = new Set();
   const jobs = [];
+  const metrics = { skippedIndia: 0 };
   for (const posting of postings) {
     const id = String(posting?.id || posting?.absolute_url || '');
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const normalized = normalizeGreenhousePosting(posting, feed.company);
+    const normalized = normalizeGreenhousePosting(posting, feed.company, metrics);
     if (normalized) jobs.push(normalized);
     if (jobs.length >= maxJobs) break;
   }
-  return { jobs, fetched: seen.size };
+  return { jobs, fetched: seen.size, skippedIndia: metrics.skippedIndia };
 }
 
 async function fetchLeverJobs(feed, options = {}) {
   const maxJobs = Math.max(1, Math.min(Number(options.maxJobs) || 100, 100));
   const jobs = [];
   const seen = new Set();
+  const metrics = { skippedIndia: 0 };
   let skip = 0;
   const limit = Math.min(50, maxJobs);
   while (jobs.length < maxJobs) {
@@ -228,14 +233,14 @@ async function fetchLeverJobs(feed, options = {}) {
       if (!id || seen.has(id)) continue;
       seen.add(id);
       newJobs += 1;
-      const normalized = normalizeLeverPosting(posting, feed.company);
+      const normalized = normalizeLeverPosting(posting, feed.company, metrics);
       if (normalized) jobs.push(normalized);
       if (jobs.length >= maxJobs) break;
     }
     if (!newJobs || data.length < limit) break;
     skip += data.length;
   }
-  return { jobs, fetched: seen.size };
+  return { jobs, fetched: seen.size, skippedIndia: metrics.skippedIndia };
 }
 
 async function fetchSwiggyJobs(feed, options = {}) {
@@ -244,15 +249,16 @@ async function fetchSwiggyJobs(feed, options = {}) {
   const maxJobs = Math.max(1, Math.min(Number(options.maxJobs) || 100, 100));
   const seen = new Set();
   const jobs = [];
+  const metrics = { skippedIndia: 0 };
   for (const posting of postings) {
     const key = String(posting?.u || '');
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    const normalized = normalizeSwiggyPosting(posting);
+    const normalized = normalizeSwiggyPosting(posting, metrics);
     if (normalized) jobs.push(normalized);
     if (jobs.length >= maxJobs) break;
   }
-  return { jobs, fetched: seen.size };
+  return { jobs, fetched: seen.size, skippedIndia: metrics.skippedIndia };
 }
 
 async function fetchCompanyJobs(companyKey, options = {}) {
@@ -270,6 +276,7 @@ async function fetchCompanyJobs(companyKey, options = {}) {
       listingJobsFetched: result.fetched,
       detailJobsFetched: result.fetched,
       recentJobs: result.jobs.length,
+      skippedIndia: result.skippedIndia,
       skippedOld: 0,
       stopReason: options.signal?.aborted ? 'timeout' : 'completed',
     },

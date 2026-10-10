@@ -33,6 +33,7 @@ test('one scraper failure does not prevent later registered targets from running
 });
 
 test('registered scrapers cannot return foreign or ambiguous jobs into the pipeline', async () => {
+  const metrics = [];
   const jobs = await runScrapers(['source'], {
     registry: {
       source() {
@@ -42,13 +43,16 @@ test('registered scrapers cannot return foreign or ambiguous jobs into the pipel
             { title: 'Unknown job', location: 'Remote' },
             { title: 'India job', location: { city: 'Pune', country: { code: 'IN' } } },
           ],
+          stats: { listingJobsFetched: 5, skippedIndia: 1 },
         };
       },
     },
+    onMetrics: (value) => metrics.push(value),
   });
 
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].location, 'Pune, India');
+  assert.deepEqual(metrics, [{ name: 'source', fetched: 5, indiaRejected: 3, failures: 0 }]);
 });
 
 test('unregistered company keys are skipped instead of treated as arbitrary career URLs', async () => {

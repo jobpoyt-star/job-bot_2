@@ -165,6 +165,9 @@ test('saveJobs ignores processed_job_keys for raw ingestion and deduplicates raw
   assert.equal(result.stats.inserted, 1);
   assert.equal(result.stats.updated, 1);
   assert.equal(result.stats.skippedDuplicates, 0);
+  assert.equal(result.stats.aiQueueInserted, 1);
+  assert.equal(result.stats.aiQueueInsertFailures, 0);
+  assert.deepEqual(result.stats.newRawJobIds, ['raw-job-1']);
   assert.ok(rawJobsInsertCalls.length >= 1);
   assert.equal(aiQueueInsertCalls.filter((call) => call === 'insert').length, 1);
 });

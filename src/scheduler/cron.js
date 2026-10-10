@@ -5,6 +5,7 @@ const { runScrapers, getRegisteredScraperKeys } = require('../scrapers');
 const { deduplicateJobs } = require('../services/duplicateService');
 const { saveJobs } = require('../database/jobRepository');
 const { runAiWorker } = require('../workers/aiWorker');
+const { recordRunMetrics } = require('../utils/runSummary');
 
 const JOB_SCHEDULES = Array.isArray(jobScrapeCron) && jobScrapeCron.length > 0
   ? jobScrapeCron
@@ -104,7 +105,10 @@ async function runJobPipeline(options = {}) {
           }, timeoutMs);
 
           try {
-            scraperPromise = runScrapers([target], { signal: controller.signal });
+            scraperPromise = runScrapers([target], {
+              signal: controller.signal,
+              onMetrics: (metrics) => recordRunMetrics({ scraper: metrics }),
+            });
             const result = await Promise.race([
               scraperPromise,
               new Promise((_, reject) => {
@@ -117,6 +121,7 @@ async function runJobPipeline(options = {}) {
           }
 
           const uniqueScrapedJobs = deduplicateScrapedJobs(scrapedJobs);
+          const scraperDuplicates = Math.max(0, scrapedJobs.length - uniqueScrapedJobs.length);
           timingStats.pagesFetched = 1;
           timingStats.listingJobsFetched = uniqueScrapedJobs.length;
           timingStats.recentJobs = uniqueScrapedJobs.length;
@@ -124,6 +129,7 @@ async function runJobPipeline(options = {}) {
           logger.info(`  Scraped & Deduplicated: ${uniqueScrapedJobs.length} unique jobs`);
 
           if (uniqueScrapedJobs.length === 0) {
+            recordRunMetrics({ duplicateJobsSkipped: scraperDuplicates });
             logger.info(`  ⊘ No jobs found for ${target}`);
             logCompanyTiming(target, { ...timingStats, durationMs: Date.now() - companyStartTime });
             continue;
@@ -131,6 +137,7 @@ async function runJobPipeline(options = {}) {
 
           const { uniqueJobs, duplicateCount } = await deduplicateJobs(uniqueScrapedJobs);
           timingStats.duplicates = duplicateCount;
+          recordRunMetrics({ duplicateJobsSkipped: scraperDuplicates + duplicateCount });
 
           if (duplicateCount > 0) {
             logger.info(`  Duplicates skipped: ${duplicateCount}`);
@@ -144,14 +151,21 @@ async function runJobPipeline(options = {}) {
 
           const result = await saveJobs(uniqueJobs);
           if (result.error) {
+            recordRunMetrics({ jobInsertFailures: uniqueJobs.length });
             throw result.error;
           }
 
           const stats = result.stats || {};
           timingStats.newJobsSaved = stats.inserted || 0;
-          const rawJobIds = Array.isArray(result.data)
-            ? result.data.map((row) => row && row.id).filter(Boolean)
-            : [];
+          const rawJobIds = Array.isArray(stats.newRawJobIds) ? stats.newRawJobIds : [];
+          recordRunMetrics({
+            rawJobsInserted: Number(stats.inserted) || 0,
+            unreconciledRawJobs: Math.max(0, (Number(stats.inserted) || 0) - rawJobIds.length),
+            aiJobsQueued: Number(stats.aiQueueInserted) || 0,
+            aiQueueInsertFailures: Number(stats.aiQueueInsertFailures) || 0,
+            aiQueueUnverified: Number(stats.aiQueueUnverified) || 0,
+            rawJobIds,
+          });
 
           scraperSummary.totalSavedRawJobs += rawJobIds.length;
           scraperSummary.batchCount += 1;
@@ -181,6 +195,7 @@ async function runJobPipeline(options = {}) {
             timingStats.stopReason = error?.message || 'error';
           }
           logger.error(`Scraper ${target} failed; continuing to next company: ${error.message}`);
+          recordRunMetrics({ scraperFailures: 1 });
           logCompanyTiming(target, { ...timingStats, durationMs: Date.now() - companyStartTime });
           continue;
         }
@@ -261,6 +276,7 @@ async function runJobPipeline(options = {}) {
     logger.info(`Pipeline duration ms: ${durationMs}`);
   } catch (error) {
     logger.error(`Scheduled pipeline error: ${error.message}`);
+    recordRunMetrics({ pipelineFailures: 1 });
     if (options.throwOnError) {
       throw error;
     }

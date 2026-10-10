@@ -45,7 +45,7 @@ async function runScrapers(urls = [], options = {}) {
     return [];
   }
 
-  const { signal } = options;
+  const { signal, onMetrics } = options;
   const scraperRegistry = options.registry || SCRAPER_REGISTRY;
   const results = [];
 
@@ -70,7 +70,15 @@ async function runScrapers(urls = [], options = {}) {
         logger.info(
           `Scraper finished for ${key}: pageCount=${stats.pageCount || 0}, listingJobsFetched=${stats.listingJobsFetched ?? jobs.length}, detailJobsFetched=${stats.detailJobsFetched ?? 0}, recentJobs=${stats.recentJobs ?? jobs.length}, skippedOld=${stats.skippedOld ?? 0}, stopReason=${stats.stopReason || 'completed'}`
         );
-        results.push(...filterIndiaEligibleJobs(jobs, key));
+        const eligibleJobs = filterIndiaEligibleJobs(jobs, key);
+        const reportedIndiaRejected = Number(stats.skippedIndia ?? stats.skippedIndiaEligibility) || 0;
+        onMetrics?.({
+          name: key,
+          fetched: Number(stats.listingJobsFetched ?? stats.fetched ?? jobs.length) || 0,
+          indiaRejected: reportedIndiaRejected + jobs.length - eligibleJobs.length,
+          failures: Number(stats.failed) || 0,
+        });
+        results.push(...eligibleJobs);
         continue;
       }
 
@@ -83,10 +91,16 @@ async function runScrapers(urls = [], options = {}) {
       const jobs = await scrapeCompanyJobs(item);
       const eligibleJobs = filterIndiaEligibleJobs(jobs, item);
       const recentJobs = eligibleJobs.filter((job) => filterJobsWithinRecentCutoff([job], { includeUnknownDate: true }).length > 0);
+      onMetrics?.({
+        name: String(item),
+        fetched: jobs.length,
+        indiaRejected: jobs.length - eligibleJobs.length,
+      });
       logger.info(`Scraper finished for ${item}: jobs=${jobs.length}, indiaEligible=${eligibleJobs.length}, recent=${recentJobs.length}, skippedOld=${eligibleJobs.length - recentJobs.length}`);
       results.push(...recentJobs);
     } catch (error) {
       logger.error(`Scraper error for ${item}: ${error.message}`);
+      onMetrics?.({ name: String(item).trim().toLowerCase(), failures: 1 });
     }
   }
 
