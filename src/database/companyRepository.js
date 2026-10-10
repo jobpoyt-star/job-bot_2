@@ -3,31 +3,51 @@
 const supabase = require('./supabaseClient');
 const logger = require('../utils/logger');
 
-const SUPPORTED_COMPANY_NAMES = ['Amazon', 'Microsoft','HSBC', 'IBM', 'SAP', 'Wipro', 'Cognizant', 'Capgemini', 'Infosys', 'Deloitte', 'Cisco', 'NTT DATA', 'LTIMindtree', 'Mphasis', 'HCLTech','Google'];
+const SUPPORTED_COMPANY_NAMES = [
+  'Zoho',
+  'Freshworks',
+  'Razorpay',
+  'PhonePe',
+  'Paytm',
+  'Flipkart',
+  'Meesho',
+  'Swiggy',
+  'Zomato',
+  'Groww',
+  'Zerodha',
+  'CRED',
+  'Udaan',
+  'Dream11',
+  'Delhivery',
+  'Ather Energy',
+  'Ola',
+  'MakeMyTrip',
+  'Policybazaar',
+  'Practo',
+];
 
 const DEFAULT_CAREER_URLS = {
-  amazon: 'https://www.amazon.jobs/en',
-  microsoft: 'https://careers.microsoft.com/us/en/search-results',
-  hsbc: 'https://portal.careers.hsbc.com/careers?hl=en',
-  ibm: 'https://www.ibm.com/careers/search',
-  wipro: 'https://careers.wipro.com/',
-  cognizant: 'https://careers.cognizant.com/global/en/search-results',
-  capgemini: 'https://www.capgemini.com/in-en/careers/job-search/',
-  infosys: 'https://careers.infosys.com/',
-  deloitte: 'https://apply.deloitte.com/en_US/careers/SearchJobs',
-  cisco: 'https://careers.cisco.com/global/en/search-results',
-  nttdata: 'https://careers.nttdata.com/global/en/search-results',
-  ltimindtree: 'https://www.ltm.com/careers',
-  mphasis: 'https://careers.mphasis.com/home.html',
-  hcltech: 'https://careers.hcltech.com/',
-  google: 'https://www.google.com/about/careers/applications/jobs/results/',
-  sap: 'https://careers.sap.com/search/?locale=en_US',
+  zoho: 'https://www.zoho.com/careers/',
+  freshworks: 'https://careers.smartrecruiters.com/Freshworks',
+  razorpay: 'https://razorpay.com/careers/',
+  phonepe: 'https://www.phonepe.com/careers/',
+  paytm: 'https://paytm.com/careers/',
+  flipkart: 'https://www.flipkartcareers.com/',
+  meesho: 'https://www.meesho.io/jobs',
+  swiggy: 'https://careers.swiggy.in/',
+  groww: 'https://groww.in/careers',
+  zerodha: 'https://careers.zerodha.com/',
+  cred: 'https://careers.cred.club/',
+  delhivery: 'https://www.delhivery.com/careers/',
+  ola: 'https://www.olaelectric.com/careers',
+  makemytrip: 'https://careers.makemytrip.com/',
+  practo: 'https://practo.app.param.ai/jobs/',
 };
 
 function getDefaultCareerUrl(name) {
   const normalizedName = String(name || '').trim().toLowerCase();
-  if (!normalizedName) return 'https://example.com/careers';
-  return DEFAULT_CAREER_URLS[normalizedName] || `https://www.${normalizedName.replace(/\s+/g, '-')}.com/careers`;
+  if (!normalizedName) return null;
+  return DEFAULT_CAREER_URLS[normalizedName] || null;
 }
 
 async function getCompanyByName(name) {

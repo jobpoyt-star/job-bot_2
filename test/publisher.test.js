@@ -35,7 +35,7 @@ test('publishPendingJobs maps processed jobs to jobs and marks them published', 
               id: 'processed-1',
               title: 'Software Engineer',
               company_id: 'company-1',
-              location: 'Remote',
+              location: 'Remote, India',
               employment_type: 'Full Time',
               work_mode: 'On-site',
               salary: '800000-1200000',
@@ -105,7 +105,7 @@ test('publishPendingJobs maps processed jobs to jobs and marks them published', 
   assert.equal(inserts[0].company_name, 'Acme');
   assert.equal(inserts[0].company_logo_url, 'https://cdn.example.com/logo.png');
   assert.equal(inserts[0].job_type, 'Full-Time');
-  assert.equal(inserts[0].location, 'Remote');
+  assert.equal(inserts[0].location, 'Remote, India');
   assert.equal(inserts[0].salary_min, 800000);
   assert.equal(inserts[0].salary_max, 1200000);
   assert.equal(inserts[0].currency, 'INR');
@@ -129,7 +129,7 @@ test('publishPendingJobs skips duplicate application links and marks processed i
               id: 'processed-2',
               title: 'Frontend Engineer',
               company_id: 'company-2',
-              location: null,
+              location: 'Bengaluru, India',
               employment_type: 'Part Time',
               work_mode: 'Hybrid',
               salary: null,
@@ -159,7 +159,7 @@ test('publishPendingJobs skips duplicate application links and marks processed i
       if (table === 'companies') {
         return {
           select() {
-            return createQueryResult({ id: 'company-2', name: 'Google', logo_url: null });
+            return createQueryResult({ id: 'company-2', name: 'Freshworks', logo_url: null });
           },
         };
       }
@@ -186,4 +186,51 @@ test('publishPendingJobs skips duplicate application links and marks processed i
   assert.equal(result.failedCount, 0);
   assert.equal(updates.length, 1);
   assert.equal(updates[0].payload.published, true);
+});
+
+test('publishPendingJobs quarantines legacy remote jobs without verified India eligibility', async () => {
+  const updates = [];
+  let jobInsertAttempted = false;
+  const mockSupabase = {
+    from(table) {
+      if (table === 'processed_jobs') {
+        return {
+          select() {
+            return createQueryResult([{
+              id: 'processed-3',
+              title: 'Remote Engineer',
+              company_id: 'company-3',
+              location: 'Remote',
+              work_mode: 'Remote',
+              description: 'Work remotely from anywhere in India.',
+              apply_url: 'https://example.com/remote',
+              status: 'active',
+              is_active: true,
+              published: false,
+            }]);
+          },
+          update(payload) {
+            updates.push(payload);
+            return { eq() { return { data: null, error: null }; } };
+          },
+        };
+      }
+      if (table === 'companies') {
+        throw new Error('Company lookup must not run for ineligible jobs');
+      }
+      if (table === 'jobs') {
+        jobInsertAttempted = true;
+        throw new Error('Ineligible job must not be published');
+      }
+      throw new Error(`Unexpected table: ${table}`);
+    },
+  };
+
+  const result = await publishPendingJobs({ supabase: mockSupabase, logger: createLogger() });
+
+  assert.equal(result.publishedCount, 0);
+  assert.equal(result.skippedCount, 1);
+  assert.equal(jobInsertAttempted, false);
+  assert.equal(updates[0].status, 'Failed');
+  assert.equal(updates[0].processing_error, 'india_eligibility:remote_india_eligibility_unverified');
 });

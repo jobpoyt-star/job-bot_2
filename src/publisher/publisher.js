@@ -2,6 +2,7 @@
 
 const logger = require('../utils/logger');
 const supabaseClient = require('../database/supabaseClient');
+const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
 
 const SYSTEM_USER_ID = '0443dc8c-136c-4a83-b484-28435d9025b0';
 const DEFAULT_JOB_TYPE = 'Full-Time';
@@ -148,6 +149,25 @@ async function publishPendingJobs(options = {}) {
 
     for (const processedJob of processedJobs) {
       try {
+        const indiaEligibility = evaluateIndiaEligibility({
+          ...processedJob,
+          description: null,
+        });
+        if (!indiaEligibility.eligible) {
+          const reason = `india_eligibility:${indiaEligibility.reason}`;
+          loggerInstance.warn(`Quarantined processed job ${processedJob.id}: ${reason}`);
+          const { error: quarantineError } = await supabase
+            .from('processed_jobs')
+            .update({
+              status: 'Failed',
+              processing_error: reason,
+            })
+            .eq('id', processedJob.id);
+          if (quarantineError) throw quarantineError;
+          skippedCount += 1;
+          continue;
+        }
+
         const { data: companyRow, error: companyError } = await supabase
           .from('companies')
           .select('*')

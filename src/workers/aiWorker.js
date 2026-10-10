@@ -10,6 +10,7 @@ const { normalizeExperience, normalizeEmploymentType, normalizeLocationForWorkMo
 const { generateCategory } = require('../utils/categoryNormalizer');
 const { normalizeSalary } = require('../utils/salaryNormalizer');
 const { detectEducation } = require('../utils/educationNormalizer');
+const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
 
 const enrichJob = createJobEnricher({ logger });
 const DEFAULT_AI_JOB_TIMEOUT_MS = 120000;
@@ -114,15 +115,23 @@ function mapRawJobToProcessedJob(rawJob, provider) {
     return null;
   }
 
-  const normalizedWorkMode = normalizeLocationForWorkMode(rawJob.location, rawJob.work_mode);
+  const indiaEligibility = evaluateIndiaEligibility({
+    ...rawJob,
+    description: null,
+  });
+  if (!indiaEligibility.eligible) {
+    return null;
+  }
+
+  const normalizedWorkMode = normalizeLocationForWorkMode(indiaEligibility.persistedLocation, rawJob.work_mode);
   const normalizedSalary = normalizeSalary(rawJob.salary);
-  const detectedWorkMode = normalizeJobWorkMode(rawJob);
+  const detectedWorkMode = normalizeJobWorkMode({ ...rawJob, location: indiaEligibility.persistedLocation });
 
   return {
     raw_job_id: rawJob.id,
     company_id: rawJob.company_id || null,
     title: rawJob.title || null,
-    location: rawJob.location || null,
+    location: indiaEligibility.persistedLocation,
     experience: normalizeExperience(rawJob.experience),
     employment_type: normalizeEmploymentType(rawJob.employment_type),
     work_mode: detectedWorkMode || normalizeWorkMode(normalizedWorkMode.workMode),
@@ -180,16 +189,25 @@ async function runSingleJobDebug(rawJobId, options = {}) {
     throw rawJobError || new Error('Raw job not found');
   }
 
+  const indiaEligibility = evaluateIndiaEligibility(rawJobRows);
+  if (!indiaEligibility.eligible) {
+    throw new Error(`AI debug mode blocked by India eligibility: ${indiaEligibility.reason}`);
+  }
+  const eligibleRawJobRows = {
+    ...rawJobRows,
+    location: indiaEligibility.persistedLocation,
+  };
+
   loggerInstance.info('=== ORIGINAL RAW JOB ===');
   loggerInstance.info(JSON.stringify(rawJobRows, null, 2));
 
-  const mergedJob = await jobEnricher(rawJobRows, { logger: loggerInstance, ...options });
+  const mergedJob = await jobEnricher(eligibleRawJobRows, { logger: loggerInstance, ...options });
 
   loggerInstance.info('=== AI RESPONSE ===');
   loggerInstance.info(JSON.stringify(mergedJob, null, 2));
 
   const processedJobPayload = mapRawJobToProcessedJob(
-    { ...rawJobRows, ...mergedJob },
+    { ...eligibleRawJobRows, ...mergedJob },
     jobEnricher.getLastSuccessfulProvider?.()
   );
   if (!processedJobPayload) {
@@ -276,6 +294,7 @@ async function runAiWorker(options = {}) {
     claimedCount: 0,
     completedCount: 0,
     failedCount: 0,
+    quarantinedCount: 0,
     aiDurationsMs: [],
   };
 
@@ -332,6 +351,7 @@ async function runAiWorker(options = {}) {
 
     let jobsCompleted = 0;
     let jobsFailed = 0;
+    let jobsQuarantined = 0;
 
     for (const queueItem of queueRows) {
       try {
@@ -406,27 +426,49 @@ async function runAiWorker(options = {}) {
         }
         metrics.claimedCount += claimedQueueRows.length;
 
-        logAiStage(loggerInstance, 'prompt_payload_prepared', rawJobRows, jobStartedAt);
+        const indiaEligibility = evaluateIndiaEligibility(rawJobRows);
+        if (!indiaEligibility.eligible) {
+          const reason = `india_eligibility:${indiaEligibility.reason}`;
+          loggerInstance.warn(`Quarantining raw job ${rawJobId} before AI enrichment: ${reason}`);
+          const { error: quarantineError } = await activeSupabase
+            .from('ai_queue')
+            .update({
+              status: 'Failed',
+              last_error: reason,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', queueItem.id);
+          if (quarantineError) throw quarantineError;
+          jobsQuarantined += 1;
+          metrics.quarantinedCount += 1;
+          continue;
+        }
+        const eligibleRawJobRows = {
+          ...rawJobRows,
+          location: indiaEligibility.persistedLocation,
+        };
+
+        logAiStage(loggerInstance, 'prompt_payload_prepared', eligibleRawJobRows, jobStartedAt);
 
         loggerInstance.info(`✓ STEP 2: Fetched Raw Job`);
         loggerInstance.info(`  Title: ${rawJobRows.title}`);
         loggerInstance.info(`  Description: ${rawJobRows.description?.substring(0, 50)}...`);
 
-        logAiStage(loggerInstance, 'ai_request_started', rawJobRows, jobStartedAt);
+        logAiStage(loggerInstance, 'ai_request_started', eligibleRawJobRows, jobStartedAt);
         const aiTimeoutMs = getAiJobTimeoutMs();
         const remainingAiTimeoutMs = Math.max(1, aiTimeoutMs - (Date.now() - jobStartedAt));
         const aiStartedAt = Date.now();
-        const enrichedJob = await jobEnricher(rawJobRows, { timeoutMs: remainingAiTimeoutMs, logger: loggerInstance });
+        const enrichedJob = await jobEnricher(eligibleRawJobRows, { timeoutMs: remainingAiTimeoutMs, logger: loggerInstance });
         metrics.aiDurationsMs.push(Date.now() - aiStartedAt);
-        logAiStage(loggerInstance, 'ai_response_received', rawJobRows, jobStartedAt);
-        logAiStage(loggerInstance, 'ai_response_parsed', rawJobRows, jobStartedAt);
+        logAiStage(loggerInstance, 'ai_response_received', eligibleRawJobRows, jobStartedAt);
+        logAiStage(loggerInstance, 'ai_response_parsed', eligibleRawJobRows, jobStartedAt);
 
         loggerInstance.info(`✓ STEP 3: AI Enrichment Complete`);
         loggerInstance.info(`  Returned Fields:`, Object.keys(enrichedJob));
         loggerInstance.info(`  Enriched Data:`, enrichedJob);
 
         const processedJobPayload = mapRawJobToProcessedJob(
-          { ...rawJobRows, ...enrichedJob },
+          { ...eligibleRawJobRows, ...enrichedJob },
           jobEnricher.getLastSuccessfulProvider?.()
         );
 
@@ -614,6 +656,7 @@ async function runAiWorker(options = {}) {
       claimedCount: metrics.claimedCount,
       completedCount: metrics.completedCount,
       failedCount: metrics.failedCount,
+      quarantinedCount: metrics.quarantinedCount,
       skippedBackoffCount: metrics.skippedBackoffCount,
       averageAiDurationMs,
       batchDurationMs: Date.now() - startedAt,
@@ -635,6 +678,7 @@ async function runAiWorker(options = {}) {
       jobsLoaded: queueRows.length,
       jobsCompleted,
       jobsFailed,
+      jobsQuarantined,
       processingTimeMs: Date.now() - startedAt,
     };
   } catch (error) {

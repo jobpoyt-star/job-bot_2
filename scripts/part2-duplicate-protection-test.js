@@ -32,16 +32,16 @@ async function main() {
     logger.info('─────────────────────────────────────────────────────────────────────────');
 
     const testJob = {
-      company_id: '60c859f8-eace-4d4d-8fdd-6c0cf06ce211',
+      company: 'Freshworks',
       title: 'Duplicate Test Job - ' + Date.now(),
-      location: 'Test Location',
+      location: 'Bengaluru, India',
       experience: '3-5 Years',
       employment_type: 'Full-time',
-      work_mode: 'Remote',
+      work_mode: 'Hybrid',
       salary: '$100k',
       description: 'Test job for duplicate detection',
       apply_url: testApplyUrl,
-      source: 'TestSource',
+      source: 'Freshworks',
       posted_date: new Date().toISOString(),
     };
 

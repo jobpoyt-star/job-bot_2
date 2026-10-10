@@ -139,6 +139,7 @@ test('saveJobs ignores processed_job_keys for raw ingestion and deduplicates raw
     filename: companyRepositoryPath,
     loaded: true,
     exports: {
+      SUPPORTED_COMPANY_NAMES: ['Freshworks'],
       getCompanyByName: async () => ({ id: 'company-1' }),
       ensureCompany: async () => ({ id: 'company-1' }),
     },
@@ -156,8 +157,8 @@ test('saveJobs ignores processed_job_keys for raw ingestion and deduplicates raw
   const { saveJobs } = require('../src/database/jobRepository');
 
   const result = await saveJobs([
-    { title: 'Existing Job', company: 'Test Company', apply_url: 'https://example.com/existing' },
-    { title: 'New Job', company: 'Test Company', apply_url: 'https://example.com/new' },
+    { title: 'Existing Job', company: 'Freshworks', location: 'Bengaluru, India', apply_url: 'https://example.com/existing' },
+    { title: 'New Job', company: 'Freshworks', location: 'Bengaluru, India', apply_url: 'https://example.com/new' },
   ]);
 
   assert.equal(processedKeyCalls.length, 0);

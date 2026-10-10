@@ -25,11 +25,11 @@ const jobNeedingEnrichment = {
   company: 'Acme',
   title: 'Software Engineer',
   description: 'Quick job ad.',
-  location: 'Remote',
+  location: 'Bengaluru, India',
   salary: null,
   experience: null,
   employment_type: null,
-  work_mode: null,
+  work_mode: 'Hybrid',
   summary: null,
   skills: [],
   responsibilities: [],
@@ -334,6 +334,81 @@ test('fallback saves only one processed enrichment for a job', async () => {
   assert.equal(result.jobsCompleted, 1);
   assert.equal(fakeSupabase.inserts.length, 1);
   assert.equal(fakeSupabase.inserts[0].ai_model, process.env.GROQ_MODEL || 'openai/gpt-oss-20b');
+});
+
+test('AI worker quarantines legacy foreign jobs before calling any provider', async () => {
+  const fakeSupabase = makeWorkerSupabase({
+    ...jobNeedingEnrichment,
+    location: 'Austin, United States',
+    work_mode: 'Onsite',
+  });
+  let providerCalls = 0;
+  const enrich = createJobEnricher({
+    provider: 'gemini',
+    logger: quietLogger(),
+    geminiClient: async () => {
+      providerCalls += 1;
+      return validResponse;
+    },
+    groqClient: async () => {
+      providerCalls += 1;
+      return validResponse;
+    },
+  });
+
+  const result = await runAiWorker({
+    batchSize: 1,
+    enrichJob: enrich,
+    logger: quietLogger(),
+    supabase: fakeSupabase,
+  });
+
+  assert.equal(result.jobsQuarantined, 1);
+  assert.equal(providerCalls, 0);
+  assert.equal(fakeSupabase.inserts.length, 0);
+  assert.ok(fakeSupabase.queueUpdates.some((payload) => (
+    payload.status === 'Failed' && payload.last_error.startsWith('india_eligibility:outside_india:')
+  )));
+});
+
+test('AI worker debug reprocessing refuses jobs outside India before enrichment', async () => {
+  let providerCalls = 0;
+  const supabase = {
+    from(table) {
+      assert.equal(table, 'raw_jobs');
+      const query = {
+        select() { return query; },
+        eq() { return query; },
+        single() {
+          return Promise.resolve({
+            data: {
+              id: 'legacy-foreign',
+              title: 'Engineer',
+              location: 'London, UK',
+              work_mode: 'Onsite',
+            },
+            error: null,
+          });
+        },
+      };
+      return query;
+    },
+  };
+
+  await assert.rejects(
+    runAiWorker({
+      debug: true,
+      rawJobId: 'legacy-foreign',
+      logger: quietLogger(),
+      supabase,
+      enrichJob: async () => {
+        providerCalls += 1;
+        return {};
+      },
+    }),
+    /AI debug mode blocked by India eligibility: outside_india/
+  );
+  assert.equal(providerCalls, 0);
 });
 
 test('legacy Groq quota errors retain their queue failure classification', async () => {

@@ -4,6 +4,7 @@ const supabase = require('./supabaseClient');
 const logger = require('../utils/logger');
 const { getCompanyByName, ensureCompany, SUPPORTED_COMPANY_NAMES } = require('./companyRepository');
 const { getConfiguredLookbackDays } = require('../utils/recentJobPolicy');
+const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
 
 const REQUIRED_JOB_COLUMNS = ['company_id', 'title', 'apply_url'];
 const DATE_FIELD_CANDIDATES = ['posted_date', 'postedDate', 'published_at', 'publishedAt', 'created_at', 'createdAt', 'date'];
@@ -64,6 +65,10 @@ function isJobWithinConfiguredLookback(job, days = getConfiguredLookbackDays()) 
   return ageInMs >= 0 && ageInMs <= cutoffMs;
 }
 
+function isJobPostedWithinLast24Hours(job) {
+  return isJobWithinConfiguredLookback(job, 1);
+}
+
 async function resolveCompanyIdForJob(job, repository = { getCompanyByName, ensureCompany, SUPPORTED_COMPANY_NAMES }) {
   if (!job || typeof job !== 'object') {
     return null;
@@ -82,8 +87,7 @@ async function resolveCompanyIdForJob(job, repository = { getCompanyByName, ensu
   const rawCompanyName = String(job.company || job.company_name || job.source || '').trim();
   const normalizedRawCompanyName = rawCompanyName.toLowerCase();
   const companyName = allowedCompanyNames.find((name) => name.toLowerCase() === normalizedRawCompanyName)
-    || allowedCompanyNames.find((name) => normalizedRawCompanyName.includes(name.toLowerCase()))
-    || rawCompanyName;
+    || allowedCompanyNames.find((name) => normalizedRawCompanyName.includes(name.toLowerCase()));
 
   if (!companyName) {
     logger.warn(`Company resolution skipped for unapproved value: ${rawCompanyName || 'empty'}`);
@@ -154,6 +158,17 @@ async function prepareJobsForInsert(jobs) {
     if (!normalizedJob) {
       continue;
     }
+
+    const indiaEligibility = evaluateIndiaEligibility(job);
+    if (!indiaEligibility.eligible) {
+      logger.info(JSON.stringify({
+        event: 'job_skipped_india_eligibility',
+        source: job.source || null,
+        reason: indiaEligibility.reason,
+      }));
+      continue;
+    }
+    normalizedJob.location = indiaEligibility.persistedLocation;
 
     if (!isJobWithinConfiguredLookback(job)) {
       logger.info(`Skipping raw job older than ${getConfiguredLookbackDays()} days or with unparseable posting date`);
@@ -509,6 +524,7 @@ module.exports = {
   normalizeJobPayload,
   extractPostingDate,
   isJobWithinConfiguredLookback,
+  isJobPostedWithinLast24Hours,
   resolveCompanyIdForJob,
   enrichJobsForPersistence,
   prepareJobsForInsert,

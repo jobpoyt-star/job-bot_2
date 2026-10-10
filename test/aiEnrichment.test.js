@@ -195,7 +195,7 @@ test('createJobEnricher skips AI work when the core enrichment fields already ex
 
   const result = await enrichJob({
     title: 'Engineer',
-    description: 'A well-written, detailed job description for an experienced engineer role that covers responsibilities, team context, and delivery expectations in a meaningful way so the enrichment layer can preserve it as-is.',
+    description: 'A well-written, detailed overview for an experienced engineer role that covers responsibilities, team context, and delivery expectations in a meaningful way so the enrichment layer can preserve it as-is. The engineer will design reliable services, review implementation choices, collaborate with product and quality teams, and contribute to operational readiness. The role includes investigating complex issues, documenting technical decisions, improving system performance, and supporting releases. Candidates will communicate clearly, work independently when appropriate, and share knowledge with teammates. The position offers opportunities to solve practical problems while maintaining quality, security, and maintainability throughout the software development lifecycle. Team members participate in planning, testing, deployment, and ongoing support. The successful candidate will apply sound engineering judgment, prioritize maintainable solutions, and help the organization deliver dependable customer experiences.',
     location: 'Remote',
     salary: '$120k',
     experience: '3+ years',

@@ -2,11 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { fillMissingFields } = require('../src/ai/jobExtractor');
 
-test('fillMissingFields does not write Confidential Company for unknown source data', () => {
+test('fillMissingFields does not trust an unsupported source as the company name', () => {
   const result = fillMissingFields({
     title: 'Senior Software Engineer',
     company: null,
-    source: 'Microsoft',
+    source: 'Legacy Source',
     location: null,
     description: 'Build and ship scalable cloud services.',
     experience: null,
@@ -19,12 +19,11 @@ test('fillMissingFields does not write Confidential Company for unknown source d
     benefits: null,
   }, {});
 
-  assert.notEqual(result.company, 'Confidential Company');
-  assert.equal(result.company, 'Microsoft');
+  assert.equal(result.company, null);
 });
 
-test('fillMissingFields accepts the project-supported companies', () => {
-  for (const company of ['Amazon', 'Microsoft', 'Wipro', 'Cognizant', 'Capgemini', 'Infosys', 'HCLTech', 'TCS']) {
+test('fillMissingFields accepts supported product companies', () => {
+  for (const company of ['Zoho', 'Freshworks', 'Razorpay', 'PhonePe', 'Paytm', 'Flipkart']) {
     const result = fillMissingFields({
       title: 'Senior Software Engineer',
       company: null,

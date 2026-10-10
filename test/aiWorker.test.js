@@ -14,10 +14,10 @@ test('mapRawJobToProcessedJob maps raw job fields into processed job payload', (
     id: 42,
     company_id: 7,
     title: 'Engineer',
-    location: 'Remote',
+    location: 'Pune, India',
     experience: '3+ years',
     employment_type: 'Full-time',
-    work_mode: 'Remote',
+    work_mode: 'Hybrid',
     salary: '$120k',
     description: 'Build things',
     summary: 'Great role',
@@ -33,8 +33,21 @@ test('mapRawJobToProcessedJob maps raw job fields into processed job payload', (
   assert.equal(payload.raw_job_id, 42);
   assert.equal(payload.company_id, 7);
   assert.equal(payload.title, 'Engineer');
+  assert.equal(payload.location, 'Pune, India');
   assert.equal(payload.ai_processed, true);
   assert.equal(payload.ai_model, expectedAiModel());
   assert.equal(payload.status, 'active');
   assert.equal(payload.is_active, true);
+});
+
+test('mapRawJobToProcessedJob refuses legacy jobs without verified India eligibility', () => {
+  const payload = mapRawJobToProcessedJob({
+    id: 43,
+    title: 'Engineer',
+    location: 'Remote',
+    work_mode: 'Remote',
+    description: 'Remote work from India.',
+  });
+
+  assert.equal(payload, null);
 });

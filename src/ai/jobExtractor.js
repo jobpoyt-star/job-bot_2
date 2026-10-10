@@ -391,7 +391,9 @@ function fillMissingFields(job, aiResponse = {}) {
   });
 
   if (!hasMeaningfulValue(mergedJob.company)) {
-    mergedJob.company = normalizeCompanyName(job?.company || job?.company_name || job?.source) || null;
+    const companySource = job?.company || job?.company_name || job?.source;
+    mergedJob.company = normalizeCompanyName(companySource)
+      || (!hasMeaningfulValue(companySource) ? 'Confidential Company' : null);
   }
 
   if (!hasMeaningfulValue(mergedJob.title)) {
@@ -493,6 +495,12 @@ function getMissingFields(job) {
   return missingFields;
 }
 
+const LOCALLY_DEFAULTED_FIELDS = new Set(['company', 'responsibilities', 'benefits']);
+
+function getFieldsRequiringAI(job) {
+  return getMissingFields(job).filter((field) => !LOCALLY_DEFAULTED_FIELDS.has(field));
+}
+
 function mergeEnrichment(job, aiResponse) {
   return fillMissingFields(job, aiResponse);
 }
@@ -550,10 +558,10 @@ async function enrichJobWithOllama(job, dependencies = {}) {
   const loggerInstance = dependencies.logger || logger;
   const ollamaClient = dependencies.ollamaClient || callOllama;
 
-  const missingFields = getMissingFields(job);
+  const missingFields = getFieldsRequiringAI(job);
   if (!missingFields.length) {
     loggerInstance.info('AI skipped: all enrichment fields already populated');
-    return job;
+    return mergeEnrichment(job, {});
   }
 
   const startTime = Date.now();
@@ -577,10 +585,10 @@ async function enrichJobWithGroq(job, dependencies = {}) {
   const loggerInstance = dependencies.logger || logger;
   const groqClient = dependencies.groqClient || callGroq;
 
-  const missingFields = getMissingFields(job);
+  const missingFields = getFieldsRequiringAI(job);
   if (!missingFields.length) {
     loggerInstance.info('AI skipped: all enrichment fields already populated');
-    return job;
+    return mergeEnrichment(job, {});
   }
 
   const startTime = Date.now();
@@ -604,10 +612,10 @@ async function enrichJobWithGemini(job, dependencies = {}) {
   const loggerInstance = dependencies.logger || logger;
   const geminiClient = dependencies.geminiClient || callGemini;
 
-  const missingFields = getMissingFields(job);
+  const missingFields = getFieldsRequiringAI(job);
   if (!missingFields.length) {
     loggerInstance.info('AI skipped: all enrichment fields already populated');
-    return job;
+    return mergeEnrichment(job, {});
   }
 
   const startTime = Date.now();

@@ -11,6 +11,7 @@ require('dotenv').config({ path: '.env' });
 const supabase = require('../src/database/supabaseClient');
 const logger = require('../src/utils/logger');
 const { runAiWorker } = require('../src/workers/aiWorker');
+const { saveJobs } = require('../src/database/jobRepository');
 
 async function main() {
   try {
@@ -24,7 +25,7 @@ async function main() {
 
     const testJobId = `test-${Date.now()}`;
     const testJob = {
-      company_id: '60c859f8-eace-4d4d-8fdd-6c0cf06ce211', // Microsoft
+      company: 'Freshworks',
       title: 'Test Senior Software Engineer - ' + Date.now(),
       location: 'Hyderabad, India',
       experience: '3-5 Years',
@@ -32,8 +33,8 @@ async function main() {
       work_mode: 'Hybrid',
       salary: '₹20-30 LPA',
       description: 'We are seeking a talented software engineer to build cloud-native services and APIs that power our next-generation products. The successful candidate will work with modern technologies including Node.js, TypeScript, AWS, and microservices architecture. This is a hybrid role based in Hyderabad, India.',
-      apply_url: 'https://apply.careers.microsoft.com/test/' + testJobId,
-      source: 'Microsoft',
+      apply_url: 'https://jobs.example.com/test/' + testJobId,
+      source: 'Test Fixture',
       posted_date: new Date().toISOString(),
       status: 'active',
       is_active: true,
@@ -48,34 +49,33 @@ async function main() {
     logger.info('STEP 2: SAVE TEST JOB TO DATABASE');
     logger.info('─────────────────────────────────────────────────────────────────────────');
 
-    const { data: savedJobs, error: saveError } = await supabase
-      .from('raw_jobs')
-      .insert([testJob])
-      .select('id, apply_url, ai_processed');
+    const saveResult = await saveJobs([testJob]);
 
-    if (saveError) {
-      logger.error(`✗ Failed to save test job: ${saveError.message}`);
+    if (saveResult.error) {
+      logger.error(`✗ Failed to save test job: ${saveResult.error.message}`);
       process.exit(1);
     }
 
+    const savedJobs = Array.isArray(saveResult.data) ? saveResult.data : [];
+    if (!savedJobs.length) {
+      throw new Error('Test job was rejected or not returned by saveJobs');
+    }
     const rawJobId = savedJobs[0].id;
     logger.info(`✓ Test job saved to raw_jobs`);
     logger.info(`  ID: ${rawJobId}`);
     logger.info(`  ai_processed: ${savedJobs[0].ai_processed}`);
     logger.info('');
 
-    // ======================== CREATE QUEUE ENTRY ========================
-    logger.info('STEP 3: CREATE AI QUEUE ENTRY');
+    // ======================== VERIFY QUEUE ENTRY ========================
+    logger.info('STEP 3: VERIFY AI QUEUE ENTRY');
     logger.info('─────────────────────────────────────────────────────────────────────────');
 
     const { data: queueInserted, error: queueError } = await supabase
       .from('ai_queue')
-      .insert([{
-        raw_job_id: rawJobId,
-        status: 'Pending',
-        retry_count: 0,
-      }])
-      .select('*');
+      .select('*')
+      .eq('raw_job_id', rawJobId)
+      .eq('status', 'Pending')
+      .limit(1);
 
     if (queueError) {
       logger.error(`✗ Failed to create queue entry: ${queueError.message}`);

@@ -4,10 +4,10 @@ const { resolveCompanyIdForJob, buildAiQueuePayloadsForNewRawJobs } = require('.
 
 test('resolveCompanyIdForJob reuses an existing company when names match case-insensitively', async () => {
   const companyId = await resolveCompanyIdForJob(
-    { company_name: '  Example Labs  ' },
+    { company_name: '  Freshworks  ' },
     {
       getCompanyByName: async (name) => {
-        assert.equal(name, 'Example Labs');
+        assert.equal(name, 'Freshworks');
         return { id: 'company-123' };
       },
       ensureCompany: async () => {
@@ -21,17 +21,33 @@ test('resolveCompanyIdForJob reuses an existing company when names match case-in
 
 test('resolveCompanyIdForJob creates a company when one does not exist', async () => {
   const companyId = await resolveCompanyIdForJob(
-    { company_name: '  New Co  ' },
+    { company_name: '  Freshworks  ' },
     {
       getCompanyByName: async () => null,
       ensureCompany: async (payload) => {
-        assert.equal(payload.name, 'New Co');
+        assert.equal(payload.name, 'Freshworks');
         return { id: 'company-456' };
       },
     }
   );
 
   assert.equal(companyId, 'company-456');
+});
+
+test('resolveCompanyIdForJob rejects unconfigured companies', async () => {
+  const companyId = await resolveCompanyIdForJob(
+    { company_name: 'Example Labs' },
+    {
+      getCompanyByName: async () => {
+        throw new Error('unconfigured company must not be looked up');
+      },
+      ensureCompany: async () => {
+        throw new Error('unconfigured company must not be created');
+      },
+    }
+  );
+
+  assert.equal(companyId, null);
 });
 
 test('buildAiQueuePayloadsForNewRawJobs creates one pending queue record per new raw job', () => {

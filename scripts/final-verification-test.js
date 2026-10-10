@@ -19,12 +19,12 @@ async function runFinalVerification() {
 
   const testJob = {
     title: `Final Verification Test - ${testJobTimestamp}`,
-    company: 'Microsoft',
+    company: 'Freshworks',
     description: `Test job for final verification at ${new Date().toISOString()}. This job should be processed through the complete pipeline with all protections.`,
     apply_url: `https://test.example.com/final-verification/${testJobTimestamp}`,
-    source: 'TEST',
-    location: 'Remote',
-    work_mode: 'Remote',
+    source: 'Freshworks',
+    location: 'Hyderabad, India',
+    work_mode: 'Hybrid',
     experience: 'Senior',
     employment_type: 'Full-time',
   };

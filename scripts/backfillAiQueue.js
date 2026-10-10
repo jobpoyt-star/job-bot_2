@@ -2,8 +2,23 @@
 
 const supabase = require('../src/database/supabaseClient');
 const logger = require('../src/utils/logger');
+const { evaluateIndiaEligibility } = require('../src/parsers/common/jobFilters');
 
 const BATCH_SIZE = 500;
+
+function filterIndiaEligibleRawJobs(rows, loggerInstance = logger) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const eligibility = evaluateIndiaEligibility(row);
+    if (!eligibility.eligible) {
+      loggerInstance.info(JSON.stringify({
+        event: 'ai_queue_backfill_skipped_india_eligibility',
+        rawJobId: row?.id || null,
+        reason: eligibility.reason,
+      }));
+    }
+    return eligibility.eligible;
+  });
+}
 
 async function fetchAllRows(tableName, select = '*') {
   const rows = [];
@@ -37,7 +52,7 @@ async function fetchAllRows(tableName, select = '*') {
 
 async function main() {
   try {
-    const rawJobs = await fetchAllRows('raw_jobs', 'id');
+    const rawJobs = await fetchAllRows('raw_jobs', 'id,location,work_mode,description');
     const queueRows = await fetchAllRows('ai_queue', 'raw_job_id');
 
     const existingQueueRawJobIds = new Set(
@@ -46,7 +61,8 @@ async function main() {
         .filter((value) => value != null && value !== '')
     );
 
-    const missingRawJobs = (Array.isArray(rawJobs) ? rawJobs : []).filter(
+    const eligibleRawJobs = filterIndiaEligibleRawJobs(rawJobs, logger);
+    const missingRawJobs = eligibleRawJobs.filter(
       (row) => row && row.id != null && !existingQueueRawJobIds.has(row.id)
     );
 
@@ -104,6 +120,10 @@ async function main() {
   }
 }
 
-main().finally(() => {
-  process.exit();
-});
+if (require.main === module) {
+  main().finally(() => {
+    process.exit();
+  });
+}
+
+module.exports = { filterIndiaEligibleRawJobs };
