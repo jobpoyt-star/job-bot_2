@@ -4,6 +4,7 @@ const supabase = require('./supabaseClient');
 const logger = require('../utils/logger');
 const { getCompanyByName, ensureCompany, SUPPORTED_COMPANY_NAMES } = require('./companyRepository');
 const { getConfiguredLookbackDays } = require('../utils/recentJobPolicy');
+const { normalizePostingDate, parsePostingDate, classifyPostingDate } = require('../utils/postingDate');
 const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
 
 const REQUIRED_JOB_COLUMNS = ['company_id', 'title', 'apply_url'];
@@ -26,8 +27,8 @@ function normalizeJobPayload(job) {
     skills: job.skills || null,
     apply_url: job.apply_url || null,
     source: job.source || 'ATS',
-    posted_date: job.posted_date || job.postedDate || null,
-    expiry_date: job.expiryDate || job.expiry_date || null,
+    posted_date: normalizePostingDate(job.posted_date ?? job.postedDate),
+    expiry_date: normalizePostingDate(job.expiryDate ?? job.expiry_date),
     status: job.status || 'active',
     is_active: job.is_active !== false,
     external_job_id: job.external_job_id || job.positionId || job.position_id || null,
@@ -45,23 +46,28 @@ function extractPostingDate(job) {
       continue;
     }
 
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed;
-    }
+    const parsed = parsePostingDate(value);
+    if (parsed) return parsed;
   }
 
   return null;
 }
 
-function isJobWithinConfiguredLookback(job, days = getConfiguredLookbackDays()) {
+function getFirstPostingDateValue(job) {
+  if (!job || typeof job !== 'object') return null;
+  return DATE_FIELD_CANDIDATES
+    .map((field) => job[field])
+    .find((value) => value != null && String(value).trim() !== '') ?? null;
+}
+
+function isJobWithinConfiguredLookback(job, days = getConfiguredLookbackDays(), now = new Date()) {
   const postingDate = extractPostingDate(job);
   if (!postingDate) {
     return true;
   }
 
   const cutoffMs = getConfiguredLookbackDays(days) * 24 * 60 * 60 * 1000;
-  const ageInMs = Date.now() - postingDate.getTime();
+  const ageInMs = now.getTime() - postingDate.getTime();
   return ageInMs >= 0 && ageInMs <= cutoffMs;
 }
 
@@ -123,34 +129,15 @@ async function enrichJobsForPersistence(jobs) {
   return Array.isArray(jobs) ? jobs : [];
 }
 
-async function prepareJobsForInsert(jobs) {
+async function prepareJobsForInsert(jobs, options = {}) {
   const preparedJobs = [];
   const inputJobs = Array.isArray(jobs) ? jobs : [];
   const enrichedJobs = await enrichJobsForPersistence(inputJobs);
 
-  // fetch and cache array-typed columns for the `raw_jobs` table
+  // PostgREST does not expose information_schema as a queryable table.
+  // `skills` is the array column used by the raw-job payload contract.
   if (!prepareJobsForInsert._arrayColumns) {
-    try {
-      const { data: cols, error } = await supabase
-        .from('information_schema.columns')
-        .select('column_name,data_type,udt_name')
-        .eq('table_name', 'raw_jobs')
-        .eq('table_schema', 'public');
-
-      if (!error && Array.isArray(cols)) {
-        const arrCols = cols
-          .filter((c) => c && (String(c.data_type).toUpperCase() === 'ARRAY' || (c.udt_name && String(c.udt_name).startsWith('_'))))
-          .map((c) => c.column_name);
-        prepareJobsForInsert._arrayColumns = new Set(arrCols || []);
-      } else {
-        // fallback: common array-like columns used by importers
-        prepareJobsForInsert._arrayColumns = new Set(['skills']);
-        logger.warn('Could not inspect information_schema.columns for raw_jobs; defaulting array columns to [skills]');
-      }
-    } catch (err) {
-      prepareJobsForInsert._arrayColumns = new Set(['skills']);
-      logger.warn('Error reading raw_jobs table schema; defaulting array columns to [skills]');
-    }
+    prepareJobsForInsert._arrayColumns = new Set(['skills']);
   }
 
   for (const job of enrichedJobs) {
@@ -170,9 +157,29 @@ async function prepareJobsForInsert(jobs) {
     }
     normalizedJob.location = indiaEligibility.persistedLocation;
 
-    if (!isJobWithinConfiguredLookback(job)) {
-      logger.info(`Skipping raw job older than ${getConfiguredLookbackDays()} days or with unparseable posting date`);
-      continue;
+    const postingDate = extractPostingDate(job);
+    const dateInput = getFirstPostingDateValue(job);
+    const dateStatus = postingDate ? 'valid' : classifyPostingDate(dateInput);
+    normalizedJob.posted_date = postingDate ? postingDate.toISOString() : null;
+    if (dateStatus === 'missing') {
+      logger.info('Raw job has no posting date; retained under the existing missing-date policy');
+      options.onMetrics?.({ missingPostingDates: 1 });
+    } else if (dateStatus === 'invalid') {
+      logger.info('Raw job has an invalid posting date; retained with a null posted_date under the existing invalid-date policy');
+      options.onMetrics?.({ invalidPostingDates: 1 });
+    } else {
+      const ageInMs = Date.now() - postingDate.getTime();
+      const lookbackMs = getConfiguredLookbackDays() * 24 * 60 * 60 * 1000;
+      if (ageInMs > lookbackMs) {
+        logger.info(`Skipping raw job older than the ${getConfiguredLookbackDays()}-day posting-date lookback`);
+        options.onMetrics?.({ lookbackRejected: 1 });
+        continue;
+      }
+      if (ageInMs < 0) {
+        logger.info('Skipping raw job with a posting date in the future');
+        options.onMetrics?.({ futurePostingDates: 1 });
+        continue;
+      }
     }
 
     if (!normalizedJob.company_id) {
@@ -322,15 +329,13 @@ async function ensureBacklogQueueEntries(options = {}) {
   }
 }
 
-async function insertJobs(jobs) {
-  const preparedJobs = await prepareJobsForInsert(jobs);
+async function insertJobs(jobs, options = {}) {
+  const preparedJobs = await prepareJobsForInsert(jobs, options);
 
   if (!preparedJobs.length) {
     return { data: [], error: null, stats: { fetched: Array.isArray(jobs) ? jobs.length : 0, prepared: 0, inserted: 0, skippedDuplicates: 0, failed: 0 } };
   }
 
-  let preparedInsertedCount = 0;
-  let preparedUpdatedCount = 0;
   let newInsertApplyUrls = [];
   let newRawJobIds = [];
   let aiQueueInserted = 0;
@@ -349,15 +354,13 @@ async function insertJobs(jobs) {
         .select('apply_url')
         .in('apply_url', jobsEligibleForRawInsert.map((job) => job.apply_url));
 
-      if (!existingError && Array.isArray(existingRows)) {
-        const existingApplyUrls = new Set(existingRows.map((row) => row?.apply_url).filter(Boolean));
-        preparedUpdatedCount = jobsEligibleForRawInsert.filter((job) => existingApplyUrls.has(job.apply_url)).length;
-        preparedInsertedCount = jobsEligibleForRawInsert.length - preparedUpdatedCount;
-        newInsertApplyUrls = jobsEligibleForRawInsert
-          .filter((job) => !existingApplyUrls.has(job.apply_url))
-          .map((job) => job.apply_url)
-          .filter((url) => typeof url === 'string' && url.trim() !== '');
-      }
+      if (existingError) throw existingError;
+      if (!Array.isArray(existingRows)) throw new Error('Raw-job duplicate check returned invalid data');
+      const existingApplyUrls = new Set(existingRows.map((row) => row?.apply_url).filter(Boolean));
+      newInsertApplyUrls = jobsEligibleForRawInsert
+        .filter((job) => !existingApplyUrls.has(job.apply_url))
+        .map((job) => job.apply_url)
+        .filter((url) => typeof url === 'string' && url.trim() !== '');
     }
 
     const { data, error } = await supabase
@@ -376,8 +379,25 @@ async function insertJobs(jobs) {
         stats: {
           fetched: Array.isArray(jobs) ? jobs.length : 0,
           prepared: preparedJobs.length,
-          inserted: preparedInsertedCount,
-          updated: preparedUpdatedCount,
+          inserted: 0,
+          updated: 0,
+          skippedDuplicates: 0,
+          failed: preparedJobs.length,
+        },
+      };
+    }
+
+    if (!Array.isArray(data) || data.length !== preparedJobs.length) {
+      const resultError = new Error('Raw-job upsert returned an incomplete result; refusing to report a successful save');
+      logger.error(resultError.message);
+      return {
+        data: null,
+        error: resultError,
+        stats: {
+          fetched: Array.isArray(jobs) ? jobs.length : 0,
+          prepared: preparedJobs.length,
+          inserted: 0,
+          updated: 0,
           skippedDuplicates: 0,
           failed: preparedJobs.length,
         },
@@ -385,13 +405,13 @@ async function insertJobs(jobs) {
     }
 
     const insertedRows = Array.isArray(data) ? data : [];
-    const insertedCount = preparedInsertedCount || insertedRows.length;
-    const updatedCount = preparedUpdatedCount || Math.max(0, insertedRows.length - insertedCount);
+    const newApplyUrlSet = new Set(newInsertApplyUrls);
+    const newlyInsertedRawJobs = insertedRows.filter((row) => newApplyUrlSet.has(row?.apply_url));
+    const insertedCount = newlyInsertedRawJobs.length;
+    const updatedCount = Math.max(0, insertedRows.length - insertedCount);
 
     try {
       if (newInsertApplyUrls.length > 0) {
-        const newApplyUrlSet = new Set(newInsertApplyUrls);
-        const newlyInsertedRawJobs = insertedRows.filter((row) => newApplyUrlSet.has(row?.apply_url));
         const insertedRawJobIds = newlyInsertedRawJobs
           .map((row) => row && row.id)
           .filter((value) => value != null && value !== '');
@@ -436,7 +456,7 @@ async function insertJobs(jobs) {
         }
       }
     } catch (queueError) {
-      aiQueueUnverified += Math.max(0, preparedInsertedCount - newRawJobIds.length);
+      aiQueueUnverified += Math.max(0, insertedCount - newRawJobIds.length);
       logger.warn(`AI queue creation failed: ${queueError.message}`);
     }
 
@@ -464,8 +484,8 @@ async function insertJobs(jobs) {
       stats: {
         fetched: Array.isArray(jobs) ? jobs.length : 0,
         prepared: preparedJobs.length,
-        inserted: preparedInsertedCount,
-        updated: preparedUpdatedCount,
+        inserted: 0,
+        updated: 0,
         skippedDuplicates: 0,
         failed: preparedJobs.length,
       },
@@ -505,9 +525,9 @@ async function getAllJobsBySource(source) {
   return { data: data || [], error };
 }
 
-async function saveJobs(jobs) {
+async function saveJobs(jobs, options = {}) {
   const filteredJobs = (jobs || []).filter(Boolean);
-  return insertJobs(filteredJobs);
+  return insertJobs(filteredJobs, options);
 }
 
 async function updateJobs(jobs) {

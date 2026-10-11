@@ -17,7 +17,11 @@ async function main({
 
   console.log('SCRAPE_ONCE_STARTED');
   try {
-    await runPipeline({ throwOnError: true, awaitTimedOutScrapers: true });
+    await runPipeline({
+      throwOnError: true,
+      awaitTimedOutScrapers: true,
+      runAiWorker: true,
+    });
   } catch (error) {
     console.error('SCRAPE_ONCE_FAILED');
     console.error(error && error.stack ? error.stack : error);

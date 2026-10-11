@@ -1,31 +1,10 @@
 'use strict';
 
 const { defaultRetentionDays } = require('../config/env');
+const { parsePostingDate } = require('./postingDate');
 
 function parsePostedDate(postedDate) {
-  if (!postedDate) {
-    return null;
-  }
-
-  if (postedDate instanceof Date) {
-    return Number.isNaN(postedDate.valueOf()) ? null : postedDate;
-  }
-
-  if (typeof postedDate === 'number' && Number.isFinite(postedDate)) {
-    return new Date(postedDate);
-  }
-
-  if (typeof postedDate === 'string') {
-    const trimmed = postedDate.trim();
-    if (!trimmed) {
-      return null;
-    }
-
-    const parsed = new Date(trimmed);
-    return Number.isNaN(parsed.valueOf()) ? null : parsed;
-  }
-
-  return null;
+  return parsePostingDate(postedDate);
 }
 
 function isRecentJob(postedDate, days) {

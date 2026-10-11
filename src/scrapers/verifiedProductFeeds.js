@@ -3,6 +3,7 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
+const { normalizePostingDate } = require('../utils/postingDate');
 
 const REQUEST_TIMEOUT_MS = 20000;
 const MAX_REQUEST_ATTEMPTS = 3;
@@ -130,7 +131,7 @@ function normalizePosting(posting, company, metrics) {
     skills: null,
     apply_url: applyUrl,
     source: company,
-    posted_date: posting.postedDate || null,
+    posted_date: normalizePostingDate(posting.postedDate ?? posting.posted_date ?? posting.createdAt),
     expiry_date: null,
     status: 'active',
     is_active: true,

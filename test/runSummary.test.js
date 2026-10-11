@@ -35,6 +35,7 @@ test('run metrics aggregate scraper counts, duplicates, successful inserts, and 
       rawJobsInserted: 5,
       aiJobsQueued: 4,
       rawJobIds: ['raw-1', 'raw-2', 'raw-3', 'raw-4'],
+      publishedRawJobIds: ['raw-1'],
     }, { filePath });
     recordRunMetrics({
       scraper: { name: 'freshworks', fetched: 2, indiaRejected: 1 },
@@ -54,6 +55,8 @@ test('run metrics aggregate scraper counts, duplicates, successful inserts, and 
     assert.equal(summary.aiJobsQueued, 4);
     assert.equal(summary.jobInsertFailures, 1);
     assert.equal(summary.aiQueueInsertFailures, 1);
+    assert.equal(summary.jobsPublished, 1);
+    assert.deepEqual(summary.publishedRawJobIds, ['raw-1']);
     assert.deepEqual(summary.rawJobIds, ['raw-1', 'raw-2', 'raw-3', 'raw-4']);
   });
 });
@@ -61,6 +64,7 @@ test('run metrics aggregate scraper counts, duplicates, successful inserts, and 
 test('reconciliation counts unique current-run AI outcomes and published job references', async () => {
   const summary = {
     rawJobIds: ['raw-1', 'raw-2', 'raw-3', 'raw-4', 'raw-5', 'raw-6'],
+    publishedRawJobIds: ['raw-6'],
   };
   const fetchImpl = async (url) => {
     const table = new URL(url).pathname.split('/').pop();
@@ -73,9 +77,9 @@ test('reconciliation counts unique current-run AI outcomes and published job ref
         { raw_job_id: 'raw-5', status: null },
       ]
       : [
-        { raw_job_id: 'raw-1', published_job_id: 'job-1' },
-        { raw_job_id: 'raw-1', published_job_id: 'job-1' },
-        { raw_job_id: 'raw-2', published_job_id: null },
+        { raw_job_id: 'raw-1', published_job_id: 'job-1', published: true, retry_count: 0 },
+        { raw_job_id: 'raw-1', published_job_id: 'job-1', published: true, retry_count: 0 },
+        { raw_job_id: 'raw-2', published_job_id: null, published: false, retry_count: 1 },
       ];
     return { ok: true, json: async () => rows };
   };
@@ -91,7 +95,9 @@ test('reconciliation counts unique current-run AI outcomes and published job ref
   assert.equal(result.aiProcessingFailures, 1);
   assert.equal(result.aiJobsInFlight, 2);
   assert.equal(result.processedJobsWritten, 2);
-  assert.equal(result.jobsInserted, 1);
+  assert.equal(result.jobsInserted, 2);
+  assert.equal(result.publicationPending, 1);
+  assert.equal(result.publicationFailures, 1);
   assert.equal(result.queueRowsMissing, 1);
   assert.equal(result.unknownQueueStatuses, 1);
 });
@@ -128,6 +134,10 @@ test('pending AI work is partial success, completed work is success, and failed 
 
   assert.equal(determineRunStatus(summary, completed, ['success']), 'SUCCESS');
   assert.equal(determineRunStatus(summary, pending, ['success']), 'PARTIAL SUCCESS');
+  assert.equal(
+    determineRunStatus(summary, { ...completed, publicationPending: 1 }, ['success']),
+    'PARTIAL SUCCESS'
+  );
   assert.equal(determineRunStatus(summary, completed, ['failure']), 'FAILED');
 });
 

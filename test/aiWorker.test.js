@@ -10,6 +10,8 @@ function expectedAiModel() {
 }
 
 test('mapRawJobToProcessedJob maps raw job fields into processed job payload', () => {
+  const postedAt = 1791495234748;
+  const expiresAt = Math.floor(postedAt / 1000);
   const payload = mapRawJobToProcessedJob({
     id: 42,
     company_id: 7,
@@ -24,8 +26,8 @@ test('mapRawJobToProcessedJob maps raw job fields into processed job payload', (
     skills: ['Node.js', 'Postgres'],
     apply_url: 'https://example.com/apply',
     source: 'ATS',
-    posted_date: '2024-01-01',
-    expiry_date: '2024-02-01',
+    posted_date: postedAt,
+    expiry_date: expiresAt,
     status: 'active',
     is_active: true,
   });
@@ -38,6 +40,8 @@ test('mapRawJobToProcessedJob maps raw job fields into processed job payload', (
   assert.equal(payload.ai_model, expectedAiModel());
   assert.equal(payload.status, 'active');
   assert.equal(payload.is_active, true);
+  assert.equal(payload.posted_date, new Date(postedAt).toISOString());
+  assert.equal(payload.expiry_date, new Date(expiresAt * 1000).toISOString());
 });
 
 test('mapRawJobToProcessedJob refuses legacy jobs without verified India eligibility', () => {

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { publishPendingJobs } = require('../src/publisher/publisher');
+const { publishPendingJobs, buildJobPayload } = require('../src/publisher/publisher');
 
 function createLogger() {
   return {
@@ -25,6 +25,7 @@ function createQueryResult(data, error = null) {
 test('publishPendingJobs maps processed jobs to jobs and marks them published', async () => {
   const updates = [];
   const inserts = [];
+  const publishedEvents = [];
 
   const mockSupabase = {
     from(table) {
@@ -33,6 +34,7 @@ test('publishPendingJobs maps processed jobs to jobs and marks them published', 
           select() {
             return createQueryResult([{ 
               id: 'processed-1',
+              raw_job_id: 'raw-1',
               title: 'Software Engineer',
               company_id: 'company-1',
               location: 'Remote, India',
@@ -96,7 +98,22 @@ test('publishPendingJobs maps processed jobs to jobs and marks them published', 
     },
   };
 
-  const result = await publishPendingJobs({ supabase: mockSupabase, logger: createLogger() });
+  const result = await publishPendingJobs({
+    supabase: mockSupabase,
+    logger: createLogger(),
+    onPublished: (event) => publishedEvents.push(event),
+  });
+
+  test('buildJobPayload normalizes numeric expiry timestamps before jobs-table insertion', () => {
+    const expiryTimestamp = 1791495234748;
+    const payload = buildJobPayload({
+      title: 'Engineer',
+      salary: null,
+      expiry_date: expiryTimestamp,
+    }, { name: 'Freshworks' });
+
+    assert.equal(payload.application_deadline, new Date(expiryTimestamp).toISOString());
+  });
 
   assert.equal(result.publishedCount, 1);
   assert.equal(result.failedCount, 0);
@@ -108,6 +125,7 @@ test('publishPendingJobs maps processed jobs to jobs and marks them published', 
   assert.equal(inserts[0].location, 'Remote, India');
   assert.equal(inserts[0].salary_min, 800000);
   assert.equal(inserts[0].salary_max, 1200000);
+  assert.deepEqual(publishedEvents, [{ rawJobId: 'raw-1', jobId: 'job-1' }]);
   assert.equal(inserts[0].currency, 'INR');
   assert.equal(inserts[0].category, 'Software Development');
   assert.equal(inserts[0].experience, '3+ years');

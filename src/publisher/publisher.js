@@ -3,6 +3,7 @@
 const logger = require('../utils/logger');
 const supabaseClient = require('../database/supabaseClient');
 const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
+const { normalizePostingDate } = require('../utils/postingDate');
 
 const SYSTEM_USER_ID = '0443dc8c-136c-4a83-b484-28435d9025b0';
 const DEFAULT_JOB_TYPE = 'Full-Time';
@@ -99,7 +100,7 @@ function buildJobPayload(processedJob, company) {
     category: processedJob.category || null,
     skills: normalizeSkills(processedJob.skills),
     application_link: processedJob.apply_url || null,
-    application_deadline: processedJob.expiry_date || null,
+    application_deadline: normalizePostingDate(processedJob.expiry_date ?? processedJob.expiryDate),
     posted_by: SYSTEM_USER_ID,
     featured: false,
     status: 'published',
@@ -228,6 +229,7 @@ async function publishPendingJobs(options = {}) {
 
         loggerInstance.info(`Published ${processedJob.title || 'Untitled Job'}`);
         publishedCount += 1;
+        options.onPublished?.({ rawJobId: processedJob.raw_job_id, jobId: insertedRow.id });
 
         try {
           await supabase
@@ -237,14 +239,14 @@ async function publishPendingJobs(options = {}) {
                 apply_url: processedJob.apply_url,
                 source: processedJob.source || null,
                 company_name: companyRow?.name || processedJob.company_name || null,
-                posted_date: processedJob.posted_date || null,
+                posted_date: normalizePostingDate(processedJob.posted_date ?? processedJob.postedDate),
               },
             ], { onConflict: 'apply_url', ignoreDuplicates: true });
         } catch (keyError) {
           loggerInstance.warn(`Failed to record processed_job_keys entry for ${processedJob.apply_url}: ${keyError.message}`);
         }
 
-        await supabase
+        const { error: processedUpdateError } = await supabase
           .from('processed_jobs')
           .update({
             published: true,
@@ -252,6 +254,7 @@ async function publishPendingJobs(options = {}) {
             published_job_id: insertedRow.id,
           })
           .eq('id', processedJob.id);
+        if (processedUpdateError) throw processedUpdateError;
       } catch (error) {
         failedCount += 1;
         loggerInstance.error(`Failed to publish processed job ${processedJob.id}: ${error.message}`);

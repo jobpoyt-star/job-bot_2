@@ -5,7 +5,7 @@ const { runScrapers, getRegisteredScraperKeys } = require('../scrapers');
 const { deduplicateJobs } = require('../services/duplicateService');
 const { saveJobs } = require('../database/jobRepository');
 const { runAiWorker } = require('../workers/aiWorker');
-const { recordRunMetrics } = require('../utils/runSummary');
+const { readRunSummary, recordRunMetrics } = require('../utils/runSummary');
 
 const JOB_SCHEDULES = Array.isArray(jobScrapeCron) && jobScrapeCron.length > 0
   ? jobScrapeCron
@@ -59,19 +59,19 @@ async function runJobPipeline(options = {}) {
     const batchSize = scraperBatchSize || 50;
     const scraperTargets = resolveScraperTargets();
     const effectiveScraperBatchSize = batchSize;
+    const scraperSummary = {
+      batchCount: 0,
+      totalSavedRawJobs: 0,
+      totalAiLoaded: 0,
+      totalAiCompleted: 0,
+      totalAiFailed: 0,
+      totalDuplicateJobsSkipped: 0,
+      rawJobIds: [],
+    };
 
     if (Array.isArray(scraperTargets) && scraperTargets.length > 0) {
       logger.info('Running company scrapers before import sources');
       logger.info(`Scraper order: ${scraperTargets.join(', ')}`);
-
-      const scraperSummary = {
-        batchCount: 0,
-        totalSavedRawJobs: 0,
-        totalAiLoaded: 0,
-        totalAiCompleted: 0,
-        totalAiFailed: 0,
-        totalDuplicateJobsSkipped: 0,
-      };
 
       for (const target of scraperTargets) {
         const companyStartTime = Date.now();
@@ -149,7 +149,9 @@ async function runJobPipeline(options = {}) {
             continue;
           }
 
-          const result = await saveJobs(uniqueJobs);
+          const result = await saveJobs(uniqueJobs, {
+            onMetrics: (metrics) => recordRunMetrics(metrics),
+          });
           if (result.error) {
             recordRunMetrics({ jobInsertFailures: uniqueJobs.length });
             throw result.error;
@@ -158,6 +160,7 @@ async function runJobPipeline(options = {}) {
           const stats = result.stats || {};
           timingStats.newJobsSaved = stats.inserted || 0;
           const rawJobIds = Array.isArray(stats.newRawJobIds) ? stats.newRawJobIds : [];
+          scraperSummary.rawJobIds.push(...rawJobIds);
           recordRunMetrics({
             rawJobsInserted: Number(stats.inserted) || 0,
             unreconciledRawJobs: Math.max(0, (Number(stats.inserted) || 0) - rawJobIds.length),
@@ -213,6 +216,7 @@ async function runJobPipeline(options = {}) {
       totalAiCompleted: 0,
       totalAiFailed: 0,
       totalDuplicateJobsSkipped: 0,
+      rawJobIds: [],
     };
 
     for (const source of importSources) {
@@ -245,9 +249,12 @@ async function runJobPipeline(options = {}) {
         const batchNumber = importSummary.batchCount;
 
         logger.info(`\n  BATCH ${batchNumber}: ${batchJobs.length} job(s)`);
-        const result = await saveJobs(batchJobs);
+        const result = await saveJobs(batchJobs, {
+          onMetrics: (metrics) => recordRunMetrics(metrics),
+        });
         if (result.error) {
           logger.error(`    ✗ Save failed: ${result.error.message}`);
+          recordRunMetrics({ jobInsertFailures: batchJobs.length });
           continue;
         }
 
@@ -257,16 +264,57 @@ async function runJobPipeline(options = {}) {
         logger.info(`    Already Processed: ${batchStats.skippedDuplicates || 0}`);
         logger.info(`    Updated: ${batchStats.updated || 0}`);
 
-        const rawJobIds = Array.isArray(result.data)
-          ? result.data.map((row) => row && row.id).filter(Boolean)
-          : [];
+        const batchRawJobIds = Array.isArray(batchStats.newRawJobIds) ? batchStats.newRawJobIds : [];
+        recordRunMetrics({
+          rawJobsInserted: Number(batchStats.inserted) || 0,
+          unreconciledRawJobs: Math.max(0, (Number(batchStats.inserted) || 0) - batchRawJobIds.length),
+          aiJobsQueued: Number(batchStats.aiQueueInserted) || 0,
+          aiQueueInsertFailures: Number(batchStats.aiQueueInsertFailures) || 0,
+          aiQueueUnverified: Number(batchStats.aiQueueUnverified) || 0,
+          rawJobIds: batchRawJobIds,
+        });
 
-        importSummary.totalSavedRawJobs += rawJobIds.length;
+        importSummary.totalSavedRawJobs += batchRawJobIds.length;
+        importSummary.rawJobIds.push(...batchRawJobIds);
       }
     }
 
     logger.info('Import sources completed');
     logger.info(`Import source summary: batches=${importSummary.batchCount}, saved=${importSummary.totalSavedRawJobs}`);
+
+    if (options.runAiWorker && process.env.ENABLE_AI_WORKER !== 'false') {
+      const summaryRawJobIds = readRunSummary().rawJobIds;
+      const rawJobIds = Array.from(new Set([
+        ...scraperSummary.rawJobIds,
+        ...importSummary.rawJobIds,
+        ...summaryRawJobIds,
+      ].map(String)));
+      if (rawJobIds.length > 0) {
+        const aiWorkerBatchSize = Number(process.env.AI_WORKER_BATCH_SIZE || 5) || 5;
+        logger.info(`Running AI worker for ${rawJobIds.length} raw job(s) tracked in this execution`);
+        const workerResult = await runAiWorker({
+          batchSize: aiWorkerBatchSize,
+          rawJobIds,
+          onPublished: ({ rawJobId }) => {
+            if (rawJobId != null) recordRunMetrics({ publishedRawJobIds: [rawJobId] });
+          },
+        });
+        if (workerResult.error) {
+          recordRunMetrics({ aiWorkerFailures: 1 });
+          logger.error(`AI worker failed: ${workerResult.error.message || workerResult.error}`);
+          if (options.throwOnError) throw new Error('AI worker failed during one-shot pipeline');
+        }
+        if (workerResult.publisher?.error || workerResult.publisher?.failedCount > 0) {
+          recordRunMetrics({ aiWorkerFailures: workerResult.publisher.failedCount || 1 });
+        }
+      } else {
+        logger.info('AI worker skipped: this workflow run has no newly persisted raw jobs to process');
+      }
+    } else if (options.runAiWorker) {
+      logger.info('AI worker disabled by ENABLE_AI_WORKER=false');
+    } else {
+      logger.info('AI worker run skipped; the application scheduler manages its worker separately');
+    }
 
     const durationMs = Date.now() - pipelineStartedAt;
     logger.info(`CYCLE_COMPLETED cycle=${currentCycleNumber} timestamp=${new Date().toISOString()} duration=${durationMs}ms`);

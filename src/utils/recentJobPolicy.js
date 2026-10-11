@@ -1,5 +1,7 @@
 'use strict';
 
+const { parsePostingDate } = require('./postingDate');
+
 const DEFAULT_RECENT_DAYS = 3;
 
 function getConfiguredLookbackDays(daysOverride) {
@@ -9,20 +11,7 @@ function getConfiguredLookbackDays(daysOverride) {
 }
 
 function parseJobDate(value) {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const milliseconds = value < 1e12 ? value * 1000 : value;
-    const date = new Date(milliseconds);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-
-  if (typeof value !== 'string' || !value.trim()) return null;
-
-  const date = new Date(value.trim());
-  return Number.isNaN(date.getTime()) ? null : date;
+  return parsePostingDate(value);
 }
 
 function getRecentCutoff(days = getConfiguredLookbackDays(), now = new Date()) {

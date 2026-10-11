@@ -51,7 +51,9 @@ async function reconcileRunJobs(summary, options = {}) {
       aiProcessingFailures: 0,
       aiJobsInFlight: 0,
       processedJobsWritten: 0,
-      jobsInserted: 0,
+      jobsInserted: Number(summary.jobsPublished) || 0,
+      publicationPending: 0,
+      publicationFailures: 0,
       unknownQueueStatuses: 0,
     };
   }
@@ -79,7 +81,7 @@ async function reconcileRunJobs(summary, options = {}) {
         baseUrl,
         apiKey,
         table: 'processed_jobs',
-        select: 'raw_job_id,published_job_id',
+        select: 'raw_job_id,published_job_id,published,retry_count',
         ids: batch,
         fetchImpl: options.fetchImpl,
       }));
@@ -98,6 +100,16 @@ async function reconcileRunJobs(summary, options = {}) {
     const publishedIds = new Set(processedRows
       .filter((row) => row?.raw_job_id != null && row.published_job_id != null)
       .map((row) => String(row.raw_job_id)));
+    const insertedThisRunIds = new Set([
+      ...publishedIds,
+      ...uniqueIds(summary.publishedRawJobIds),
+    ]);
+    const publicationPendingIds = new Set(processedRows
+      .filter((row) => row?.raw_job_id != null && row.published !== true && row.published_job_id == null)
+      .map((row) => String(row.raw_job_id)));
+    const publicationFailedIds = new Set(processedRows
+      .filter((row) => row?.raw_job_id != null && Number(row.retry_count) > 0 && row.published !== true)
+      .map((row) => String(row.raw_job_id)));
 
     return {
       available: true,
@@ -105,7 +117,9 @@ async function reconcileRunJobs(summary, options = {}) {
       aiProcessingFailures: new Set(rawJobIds.filter((id) => queueStatusByRawId.get(id) === 'failed')).size,
       aiJobsInFlight: new Set(rawJobIds.filter((id) => QUEUE_IN_FLIGHT.has(queueStatusByRawId.get(id)))).size,
       processedJobsWritten: processedIds.size,
-      jobsInserted: publishedIds.size,
+      jobsInserted: insertedThisRunIds.size,
+      publicationPending: publicationPendingIds.size,
+      publicationFailures: publicationFailedIds.size,
       unknownQueueStatuses: statuses.filter((status) => !['pending', 'processing', 'retrying', 'completed', 'failed'].includes(status)).length,
       queueRowsMissing: rawJobIds.filter((id) => !queueStatusByRawId.has(id)).length,
     };
@@ -129,11 +143,14 @@ function determineRunStatus(summary, reconciliation, workflowOutcomes = []) {
     || summary.unreconciledRawJobs
     || summary.aiQueueInsertFailures
     || summary.aiQueueUnverified
+    || summary.aiWorkerFailures
     || !reconciliation.available
     || reconciliation.aiProcessingFailures
     || reconciliation.aiJobsInFlight
     || reconciliation.unknownQueueStatuses
     || reconciliation.queueRowsMissing
+    || reconciliation.publicationPending
+    || reconciliation.publicationFailures
   ) {
     return 'PARTIAL SUCCESS';
   }
@@ -154,6 +171,8 @@ function formatRunSummary(summary, reconciliation, status) {
     ['New raw jobs persisted', summary.rawJobsInserted || 0],
     ['Raw jobs unavailable for run-specific reconciliation', summary.unreconciledRawJobs || 0],
     ['Jobs inserted into jobs table', value('jobsInserted')],
+    ['Jobs awaiting publication', value('publicationPending')],
+    ['Publication failures', value('publicationFailures')],
     ['Duplicate jobs skipped', summary.duplicateJobsSkipped || 0],
     ['India eligibility rejections', summary.indiaRejected || 0],
     ['AI jobs added to queue', summary.aiJobsQueued || 0],
@@ -163,7 +182,18 @@ function formatRunSummary(summary, reconciliation, status) {
     ['processed_jobs rows written', value('processedJobsWritten')],
     ['AI queue insert failures', summary.aiQueueInsertFailures || 0],
     ['AI queue status unverified during insertion', summary.aiQueueUnverified || 0],
+    ['Scraper failures', Math.max(
+      Number(summary.scraperFailures) || 0,
+      Object.values(summary.scrapers || {}).reduce(
+        (total, scraper) => total + (Number(scraper?.failures) || 0),
+        0
+      )
+    )],
     ['Raw-job insert failures', summary.jobInsertFailures || 0],
+    ['Jobs rejected by posting-date lookback', summary.lookbackRejected || 0],
+    ['Invalid posting dates retained as null', summary.invalidPostingDates || 0],
+    ['Missing posting dates retained as null', summary.missingPostingDates || 0],
+    ['Future posting dates rejected', summary.futurePostingDates || 0],
   ];
 
   const lines = [
@@ -215,7 +245,7 @@ async function main() {
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${result.markdown}\n`);
   }
-  if (result.status === 'FAILED') process.exitCode = 1;
+  if (result.status !== 'SUCCESS') process.exitCode = 1;
 }
 
 if (require.main === module) {

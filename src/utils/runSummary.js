@@ -10,9 +10,15 @@ const NUMERIC_METRICS = [
   'jobInsertFailures',
   'duplicateJobsSkipped',
   'indiaRejected',
+  'lookbackRejected',
+  'invalidPostingDates',
+  'missingPostingDates',
+  'futurePostingDates',
+  'jobsPublished',
   'aiJobsQueued',
   'aiQueueInsertFailures',
   'aiQueueUnverified',
+  'aiWorkerFailures',
   'scraperFailures',
   'pipelineFailures',
 ];
@@ -24,6 +30,7 @@ function createEmptyRunSummary(runId = null) {
     startedAt: new Date().toISOString(),
     scrapers: {},
     rawJobIds: [],
+    publishedRawJobIds: [],
     ...Object.fromEntries(NUMERIC_METRICS.map((metric) => [metric, 0])),
   };
 }
@@ -45,6 +52,7 @@ function readRunSummary(filePath = process.env.JOBBOT_RUN_SUMMARY_FILE) {
   for (const metric of NUMERIC_METRICS) {
     if (!Number.isFinite(summary[metric])) summary[metric] = 0;
   }
+  if (!Array.isArray(summary.publishedRawJobIds)) summary.publishedRawJobIds = [];
   if (!summary.scrapers || typeof summary.scrapers !== 'object' || Array.isArray(summary.scrapers)) {
     summary.scrapers = {};
   }
@@ -95,6 +103,16 @@ function recordRunMetrics(delta, options = {}) {
     const ids = new Set(summary.rawJobIds.map(String));
     for (const id of newIds) ids.add(id);
     summary.rawJobIds = Array.from(ids);
+  }
+
+  const publishedIds = Array.isArray(delta?.publishedRawJobIds)
+    ? delta.publishedRawJobIds.filter((id) => id != null && String(id).length > 0).map(String)
+    : [];
+  if (publishedIds.length) {
+    const ids = new Set(summary.publishedRawJobIds.map(String));
+    for (const id of publishedIds) ids.add(id);
+    summary.publishedRawJobIds = Array.from(ids);
+    summary.jobsPublished = summary.publishedRawJobIds.length;
   }
 
   writeRunSummary(summary, options.filePath);

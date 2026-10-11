@@ -17,7 +17,11 @@ test('one-shot runner runs one pipeline cycle and awaits browser cleanup', async
     const exitCode = await main({
       runPipeline: async (options) => {
         pipelineCalls += 1;
-        assert.deepEqual(options, { throwOnError: true, awaitTimedOutScrapers: true });
+        assert.deepEqual(options, {
+          throwOnError: true,
+          awaitTimedOutScrapers: true,
+          runAiWorker: true,
+        });
       },
       closeBrowserFn: async () => {
         cleanupCalls += 1;

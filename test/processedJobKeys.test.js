@@ -83,7 +83,13 @@ test('saveJobs ignores processed_job_keys for raw ingestion and deduplicates raw
           upsert() {
             return {
               select() {
-                return Promise.resolve({ data: [{ id: 'raw-job-1', apply_url: 'https://example.com/new' }], error: null });
+                return Promise.resolve({
+                  data: [
+                    { id: 'raw-job-existing', apply_url: 'https://example.com/existing' },
+                    { id: 'raw-job-new', apply_url: 'https://example.com/new' },
+                  ],
+                  error: null,
+                });
               },
             };
           },
@@ -167,7 +173,7 @@ test('saveJobs ignores processed_job_keys for raw ingestion and deduplicates raw
   assert.equal(result.stats.skippedDuplicates, 0);
   assert.equal(result.stats.aiQueueInserted, 1);
   assert.equal(result.stats.aiQueueInsertFailures, 0);
-  assert.deepEqual(result.stats.newRawJobIds, ['raw-job-1']);
+  assert.deepEqual(result.stats.newRawJobIds, ['raw-job-new']);
   assert.ok(rawJobsInsertCalls.length >= 1);
   assert.equal(aiQueueInsertCalls.filter((call) => call === 'insert').length, 1);
 });

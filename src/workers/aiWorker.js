@@ -10,6 +10,7 @@ const { normalizeExperience, normalizeEmploymentType, normalizeLocationForWorkMo
 const { generateCategory } = require('../utils/categoryNormalizer');
 const { normalizeSalary } = require('../utils/salaryNormalizer');
 const { detectEducation } = require('../utils/educationNormalizer');
+const { normalizePostingDate } = require('../utils/postingDate');
 const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
 
 const enrichJob = createJobEnricher({ logger });
@@ -146,8 +147,8 @@ function mapRawJobToProcessedJob(rawJob, provider) {
     benefits: rawJob.benefits || null,
     apply_url: rawJob.apply_url || null,
     source: rawJob.source || null,
-    posted_date: rawJob.posted_date || null,
-    expiry_date: rawJob.expiry_date || rawJob.expiryDate || null,
+    posted_date: normalizePostingDate(rawJob.posted_date ?? rawJob.postedDate),
+    expiry_date: normalizePostingDate(rawJob.expiry_date ?? rawJob.expiryDate),
     status: rawJob.status || 'active',
     is_active: rawJob.is_active !== false,
     ai_processed: true,
@@ -333,7 +334,13 @@ async function runAiWorker(options = {}) {
 
     if (queueError) {
       loggerInstance.error(`AI Worker queue load failed: ${queueError.message}`);
-      return { jobsLoaded: 0, jobsCompleted: 0, jobsFailed: 0, processingTimeMs: Date.now() - startedAt };
+      return {
+        jobsLoaded: 0,
+        jobsCompleted: 0,
+        jobsFailed: 0,
+        processingTimeMs: Date.now() - startedAt,
+        error: queueError,
+      };
     }
 
     metrics.fetchedCount = Array.isArray(queueItems) ? queueItems.length : 0;
@@ -662,13 +669,20 @@ async function runAiWorker(options = {}) {
       batchDurationMs: Date.now() - startedAt,
     }));
 
+    let publisherResult = null;
     if (jobsCompleted > 0) {
       loggerInstance.info('✓ Batch complete: publishing pending jobs once');
       try {
-        await publishPendingJobs({ logger: loggerInstance, supabase: activeSupabase });
+        publisherResult = await publishPendingJobs({
+          logger: loggerInstance,
+          supabase: activeSupabase,
+          rawJobIds,
+          onPublished: options.onPublished,
+        });
         loggerInstance.info('✓ Publisher completed after batch');
       } catch (publishError) {
         loggerInstance.error(`Publisher failed after batch: ${publishError.message}`);
+        publisherResult = { error: publishError.message };
       }
     } else {
       loggerInstance.info('No jobs completed in this batch; skipping publish step');
@@ -679,6 +693,7 @@ async function runAiWorker(options = {}) {
       jobsCompleted,
       jobsFailed,
       jobsQuarantined,
+      publisher: publisherResult,
       processingTimeMs: Date.now() - startedAt,
     };
   } catch (error) {
@@ -688,6 +703,7 @@ async function runAiWorker(options = {}) {
       jobsCompleted: 0,
       jobsFailed: 0,
       processingTimeMs: Date.now() - startedAt,
+      error,
     };
   }
 }
