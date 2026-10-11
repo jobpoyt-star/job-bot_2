@@ -1,9 +1,6 @@
 name: JOBPOYT Job Scraper
 
 on:
-  schedule:
-    - cron: '30 23 * * *'
-    - cron: '30 11 * * *'
   workflow_dispatch:
 
 concurrency:

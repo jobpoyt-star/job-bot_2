@@ -6,7 +6,7 @@ Node.js job ingestion, validation, Supabase persistence, AI enrichment, and publ
 
 1. Install dependencies with `npm ci`.
 2. Copy `.env.example` to `.env` and configure the required Supabase and AI-provider values.
-3. Run the pipeline with `npm start`.
+3. Run one scraping cycle locally with `npm start`.
 4. Run tests with `npm test`.
 
 ## Current behavior
@@ -19,7 +19,7 @@ Node.js job ingestion, validation, Supabase persistence, AI enrichment, and publ
 
 ## GitHub Actions
 
-The existing JOBPOYT Job Scraper workflow and schedule remain in `.github/workflows/job-scraper.yml`. Configure these repository secrets:
+The JOBPOYT Job Scraper workflow has no scheduled runs. Scraping starts locally when you run `npm start`; the workflow can still be started manually with `workflow_dispatch`. Configure these repository secrets only if you use that manual workflow:
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
