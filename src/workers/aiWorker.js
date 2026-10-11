@@ -602,17 +602,12 @@ async function runAiWorker(options = {}) {
         loggerInstance.error(`║ Stack: ${error.stack}`);
         loggerInstance.error(`╚════════════════════════════════════════════════════════════════╝\n`);
 
-        // For quota errors: immediately mark as Failed and stop processing
-        // For other errors: use backoff retry (up to 3 attempts)
-        let nextRetryCount, shouldFail;
-        
+        // Keep quota-limited jobs queued with backoff; retry once provider capacity returns.
+        const nextRetryCount = (queueItem.retry_count || 0) + 1;
+        const shouldFail = !isQuotaError && nextRetryCount >= 3;
+
         if (isQuotaError) {
-          shouldFail = true;
-          nextRetryCount = (queueItem.retry_count || 0) + 1;
-          loggerInstance.error(`QUOTA EXHAUSTED - Marking job as Failed and stopping AI processing`);
-        } else {
-          nextRetryCount = (queueItem.retry_count || 0) + 1;
-          shouldFail = nextRetryCount >= 3;
+          loggerInstance.warn('AI provider quota exhausted; keeping this job Pending with backoff');
         }
         
         const { error: queueFailError } = await activeSupabase
@@ -633,10 +628,10 @@ async function runAiWorker(options = {}) {
           loggerInstance.warn(`Queue item re-queued for retry ${nextRetryCount}/3`);
         }
         
-        // If quota error, stop processing remaining jobs
+        // Stop this batch after a quota error so remaining jobs do not make doomed provider calls.
         if (isQuotaError) {
           loggerInstance.error(`\n╔════════════════════════════════════════════════════════════════╗`);
-          loggerInstance.error(`║ STOPPING AI WORKER - GROQ QUOTA EXHAUSTED ║`);
+          loggerInstance.error(`║ STOPPING AI WORKER - PROVIDER QUOTA EXHAUSTED ║`);
           loggerInstance.error(`║ ${jobsCompleted} jobs completed, ${jobsFailed} failed ║`);
           loggerInstance.error(`╚════════════════════════════════════════════════════════════════╝\n`);
           break; // Stop processing remaining queue items

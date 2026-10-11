@@ -45,9 +45,13 @@ function isQuotaError(error) {
   if (/insufficient_quota|quota.*exceed|quota.*limit/i.test(message)) {
     return true;
   }
-  
+
+  if (status === 429) {
+    return true;
+  }
+
   // HTTP 429 (rate limit) or 402 (payment required) or similar
-  if (status === 429 || status === 402 || status === 400) {
+  if (status === 402 || status === 400) {
     if (/rate|limit|quota|retry|too many/i.test(message)) {
       return true;
     }
@@ -166,4 +170,5 @@ async function callGroq(prompt, options = {}) {
 module.exports = {
   callGroq,
   GroqQuotaError,
+  isQuotaError,
 };

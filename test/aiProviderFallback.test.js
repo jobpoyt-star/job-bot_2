@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { createJobEnricher } = require('../src/ai');
 const { callGemini, resetGeminiRateLimitState } = require('../src/ai/geminiClient');
 const { runAiWorker } = require('../src/workers/aiWorker');
-const { GroqQuotaError } = require('../src/ai/groqClient');
+const { GroqQuotaError, isQuotaError } = require('../src/ai/groqClient');
 
 const validResponse = JSON.stringify({
   title: 'Senior Software Engineer',
@@ -41,6 +41,12 @@ const jobNeedingEnrichment = {
 function quietLogger() {
   return { info() {}, warn() {}, error() {}, debug() {} };
 }
+
+test('Groq treats HTTP 429 as a deferred quota/rate-limit error, not arbitrary HTTP 400', () => {
+  assert.equal(isQuotaError({ status: 429, message: 'Request failed' }), true);
+  assert.equal(isQuotaError({ status: 400, message: 'Invalid request body' }), false);
+  assert.equal(isQuotaError({ status: 404, message: 'Not found' }), false);
+});
 
 function makeWorkerSupabase(rawJob = jobNeedingEnrichment) {
   const inserts = [];
@@ -309,6 +315,34 @@ test('both provider failures preserve the worker queue retry behavior', async ()
   assert.equal(result.jobsFailed, 1);
   assert.equal(fakeSupabase.inserts.length, 0);
   assert.ok(fakeSupabase.queueUpdates.some((payload) => payload.status === 'Pending' && payload.retry_count === 1));
+});
+
+test('provider quota failures remain Pending with backoff instead of being abandoned', async () => {
+  const fakeSupabase = makeWorkerSupabase();
+  const enrich = createJobEnricher({
+    provider: 'gemini',
+    logger: quietLogger(),
+    geminiClient: async () => {
+      throw new Error('Gemini unavailable');
+    },
+    groqClient: async () => {
+      throw new GroqQuotaError('quota exhausted');
+    },
+  });
+
+  const result = await runAiWorker({
+    batchSize: 1,
+    enrichJob: enrich,
+    logger: quietLogger(),
+    supabase: fakeSupabase,
+  });
+
+  assert.equal(result.jobsFailed, 1);
+  assert.equal(fakeSupabase.inserts.length, 0);
+  assert.ok(fakeSupabase.queueUpdates.some((payload) => (
+    payload.status === 'Pending' && payload.retry_count === 1
+  )));
+  assert.equal(fakeSupabase.queueUpdates.some((payload) => payload.status === 'Failed'), false);
 });
 
 test('fallback saves only one processed enrichment for a job', async () => {
