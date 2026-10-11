@@ -25,6 +25,22 @@ test('normalizeArbeitnowJob maps Arbeitnow payload fields into the existing job 
   assert.ok(typeof normalized.posted_date === 'string' && normalized.posted_date.includes('T'));
 });
 
+test('normalizeArbeitnowJob converts second and millisecond Unix timestamps to ISO', () => {
+  const timestampMs = 1791495234748;
+
+  for (const [createdAt, expected] of [
+    [timestampMs, new Date(timestampMs).toISOString()],
+    [String(timestampMs), new Date(timestampMs).toISOString()],
+    [Math.floor(timestampMs / 1000), new Date(Math.floor(timestampMs / 1000) * 1000).toISOString()],
+    [String(Math.floor(timestampMs / 1000)), new Date(Math.floor(timestampMs / 1000) * 1000).toISOString()],
+  ]) {
+    assert.equal(
+      normalizeArbeitnowJob({ created_at: createdAt }).posted_date,
+      expected
+    );
+  }
+});
+
 test('buildDuplicateCheckKey uses title, company name, and apply URL', () => {
   const job = {
     title: 'Staff Engineer',

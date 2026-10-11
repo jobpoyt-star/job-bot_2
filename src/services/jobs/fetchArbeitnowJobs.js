@@ -4,6 +4,7 @@ const axios = require('axios');
 const logger = require('../../utils/logger');
 const supabase = require('../../database/supabaseClient');
 const { filterRecentJobs } = require('../../utils/jobDateFilter');
+const { normalizePostingDate } = require('../../utils/postingDate');
 const { arbeitnowRetentionDays } = require('../../config/env');
 
 const ARBEITNOW_API_URL = 'https://www.arbeitnow.com/api/job-board-api';
@@ -43,27 +44,7 @@ function normalizeEmploymentType(job) {
 }
 
 function normalizeTimestamp(rawValue) {
-  if (!rawValue) {
-    return null;
-  }
-
-  if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
-    return new Date(rawValue * 1000).toISOString();
-  }
-
-  if (typeof rawValue === 'string') {
-    const parsedNumber = Number(rawValue);
-    if (Number.isFinite(parsedNumber)) {
-      return new Date(parsedNumber * 1000).toISOString();
-    }
-
-    const parsedDate = new Date(rawValue);
-    if (!Number.isNaN(parsedDate.valueOf())) {
-      return parsedDate.toISOString();
-    }
-  }
-
-  return null;
+  return normalizePostingDate(rawValue);
 }
 
 function stripHtml(value) {

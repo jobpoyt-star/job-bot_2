@@ -86,18 +86,41 @@ function job(overrides = {}) {
   };
 }
 
-test('persists epoch-millisecond posting dates as ISO and creates one AI queue row', async () => {
+test('persists Unix second and millisecond posting dates as ISO before database insert', async () => {
   await withRepository({}, async ({ saveJobs }, calls) => {
     const timestamp = Date.now() - 60_000;
-    const result = await saveJobs([job({ posted_date: timestamp })]);
+    const timestampSeconds = Math.floor(timestamp / 1000);
+    const inputJobs = [
+      job({ apply_url: 'https://jobs.example/apply/ms-number', posted_date: timestamp }),
+      job({ apply_url: 'https://jobs.example/apply/ms-string', posted_date: String(timestamp) }),
+      job({ apply_url: 'https://jobs.example/apply/seconds-number', posted_date: timestampSeconds }),
+      job({ apply_url: 'https://jobs.example/apply/seconds-string', posted_date: String(timestampSeconds) }),
+    ];
+    const previousLookbackDays = process.env.JOB_LOOKBACK_DAYS;
+    process.env.JOB_LOOKBACK_DAYS = '30';
+    let result;
+    try {
+      result = await saveJobs(inputJobs);
+    } finally {
+      if (previousLookbackDays === undefined) delete process.env.JOB_LOOKBACK_DAYS;
+      else process.env.JOB_LOOKBACK_DAYS = previousLookbackDays;
+    }
 
     assert.equal(result.error, null);
     assert.equal(calls.upserts.length, 1);
-    assert.equal(calls.upserts[0].payload[0].posted_date, new Date(timestamp).toISOString());
-    assert.deepEqual(result.stats.newRawJobIds, ['raw-1']);
-    assert.equal(result.stats.inserted, 1);
-    assert.equal(result.stats.aiQueueInserted, 1);
-    assert.equal(calls.queueInserts[0].length, 1);
+    assert.deepEqual(
+      calls.upserts[0].payload.map((payload) => payload.posted_date),
+      [
+        new Date(timestamp).toISOString(),
+        new Date(timestamp).toISOString(),
+        new Date(timestampSeconds * 1000).toISOString(),
+        new Date(timestampSeconds * 1000).toISOString(),
+      ]
+    );
+    assert.deepEqual(result.stats.newRawJobIds, ['raw-1', 'raw-2', 'raw-3', 'raw-4']);
+    assert.equal(result.stats.inserted, 4);
+    assert.equal(result.stats.aiQueueInserted, 4);
+    assert.equal(calls.queueInserts[0].length, 4);
     assert.equal(calls.queueInserts[0][0].raw_job_id, 'raw-1');
     assert.equal(calls.queueInserts[0][0].status, 'Pending');
     assert.equal(calls.queueInserts[0][0].retry_count, 0);

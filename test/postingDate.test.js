@@ -39,3 +39,17 @@ test('enforces the inclusive configured lookback boundary and rejects future dat
   assert.equal(isJobWithinConfiguredLookback({ posted_date: null }, 3, now), true);
   assert.equal(isJobWithinConfiguredLookback({ posted_date: 'invalid' }, 3, now), true);
 });
+
+test('compares Unix timestamps in seconds and milliseconds as the same posting date', () => {
+  const timestampMs = 1791495234748;
+  const now = new Date('2026-10-12T00:00:00.000Z');
+  const oldTimestampMs = Date.parse('2026-09-01T00:00:00.000Z');
+
+  for (const timestamp of [timestampMs, String(timestampMs), Math.floor(timestampMs / 1000), String(Math.floor(timestampMs / 1000))]) {
+    assert.equal(isJobWithinConfiguredLookback({ posted_date: timestamp }, 30, now), true);
+  }
+
+  for (const timestamp of [oldTimestampMs, String(oldTimestampMs), Math.floor(oldTimestampMs / 1000), String(Math.floor(oldTimestampMs / 1000))]) {
+    assert.equal(isJobWithinConfiguredLookback({ posted_date: timestamp }, 30, now), false);
+  }
+});
