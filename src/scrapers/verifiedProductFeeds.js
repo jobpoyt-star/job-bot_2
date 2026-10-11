@@ -73,15 +73,29 @@ async function requestJson(url, params, options = {}) {
     try {
       const response = await request(url, {
         params,
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0 (compatible; JOBPOYTJobBot/1.0)',
+        },
         timeout: options.timeoutMs || REQUEST_TIMEOUT_MS,
         signal: options.signal,
       });
       return response?.data === undefined ? response : response.data;
     } catch (error) {
       const status = Number(error?.response?.status || error?.status || 0);
+      const networkErrorCodes = new Set([
+        'ECONNABORTED',
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'ETIMEDOUT',
+        'EAI_AGAIN',
+        'ENOTFOUND',
+        'EHOSTUNREACH',
+        'ENETUNREACH',
+      ]);
       const retryable = RETRYABLE_STATUSES.has(status)
-        || ['ECONNABORTED', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error?.code);
+        || networkErrorCodes.has(error?.code)
+        || (!status && (Boolean(error?.request) || /network error|fetch failed|socket hang up/i.test(error?.message || '')));
       const retryAfterMs = status === 429 ? getRetryAfterMs(error) : null;
       if (
         !retryable
@@ -91,9 +105,10 @@ async function requestJson(url, params, options = {}) {
         const safeError = new Error(
           status
             ? `Job feed request failed with HTTP ${status}`
-            : `Job feed request failed (${retryable ? 'temporary network error' : 'request error'})`
+            : `Job feed request failed (${retryable ? 'temporary network error' : 'request error'}${error?.code ? `, code ${error.code}` : ''})`
         );
         safeError.status = status || undefined;
+        safeError.code = error?.code;
         throw safeError;
       }
 

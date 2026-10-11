@@ -38,6 +38,7 @@ test('Greenhouse adapter normalizes Razorpay India listings and ignores foreign 
   });
 
   assert.equal(requests.length, 1);
+  assert.equal(requests[0].config.headers['User-Agent'], 'Mozilla/5.0 (compatible; JOBPOYTJobBot/1.0)');
   assert.equal(result.jobs.length, 1);
   assert.equal(result.jobs[0].company, 'Razorpay');
   assert.equal(result.jobs[0].location, 'Bengaluru, India');
@@ -157,4 +158,22 @@ test('verified feed requests retry transient failures a bounded number of times'
 
   assert.equal(calls, 3);
   assert.deepEqual(result.jobs, []);
+});
+
+test('verified feed retries temporary network failures without an HTTP response', async () => {
+  let calls = 0;
+  await assert.rejects(
+    fetchCompanyJobs('groww', {
+      wait: async () => {},
+      request: async () => {
+        calls += 1;
+        const error = new Error('temporary network failure');
+        error.code = 'ECONNRESET';
+        error.request = {};
+        throw error;
+      },
+    }),
+    /temporary network error, code ECONNRESET/
+  );
+  assert.equal(calls, 3);
 });
