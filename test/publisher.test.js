@@ -69,7 +69,7 @@ test('publishPendingJobs maps processed jobs to jobs and marks them published', 
       if (table === 'companies') {
         return {
           select() {
-            return createQueryResult({ id: 'company-1', name: 'Acme', logo_url: 'https://cdn.example.com/logo.png' });
+            return createQueryResult({ id: 'company-1', name: 'Acme', company_logo_url: 'https://cdn.example.com/logo.png' });
           },
         };
       }

@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const logger = require('../utils/logger');
 const { scraperBatchSize, jobScrapeCron, companyScraperTimeoutMs } = require('../config/env');
 const { runScrapers, getRegisteredScraperKeys } = require('../scrapers');
+const { seedCompanies } = require('../database/seedCompanies');
 const { deduplicateJobs } = require('../services/duplicateService');
 const { saveJobs } = require('../database/jobRepository');
 const { runAiWorker } = require('../workers/aiWorker');
@@ -43,6 +44,58 @@ function logCompanyTiming(target, stats) {
   );
 }
 
+async function runAiWorkerUntilIdle({
+  batchSize,
+  worker = runAiWorker,
+  onPublished,
+} = {}) {
+  const result = {
+    jobsLoaded: 0,
+    jobsCompleted: 0,
+    jobsFailed: 0,
+    jobsQuarantined: 0,
+    batches: 0,
+    publisher: {
+      publishedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+    },
+  };
+
+  while (true) {
+    const batchResult = await worker({ batchSize, onPublished });
+    result.batches += 1;
+    result.jobsLoaded += Number(batchResult?.jobsLoaded) || 0;
+    result.jobsCompleted += Number(batchResult?.jobsCompleted) || 0;
+    result.jobsFailed += Number(batchResult?.jobsFailed) || 0;
+    result.jobsQuarantined += Number(batchResult?.jobsQuarantined) || 0;
+
+    if (batchResult?.publisher) {
+      result.publisher.publishedCount += Number(batchResult.publisher.publishedCount) || 0;
+      result.publisher.skippedCount += Number(batchResult.publisher.skippedCount) || 0;
+      result.publisher.failedCount += Number(batchResult.publisher.failedCount) || 0;
+      result.publisher.error = result.publisher.error || batchResult.publisher.error;
+    }
+
+    if (batchResult?.error) {
+      result.error = batchResult.error;
+      break;
+    }
+
+    const madeProgress = (Number(batchResult?.jobsCompleted) || 0)
+      + (Number(batchResult?.jobsQuarantined) || 0) > 0;
+    if (
+      !madeProgress
+      || (Number(batchResult?.jobsFailed) || 0) > 0
+      || (Number(batchResult?.jobsLoaded) || 0) < batchSize
+    ) {
+      break;
+    }
+  }
+
+  return result;
+}
+
 async function runJobPipeline(options = {}) {
   if (pipelineRunning) {
     logger.warn('Job pipeline already running; skipping overlapping execution');
@@ -56,8 +109,21 @@ async function runJobPipeline(options = {}) {
   logger.info(`CYCLE_STARTED cycle=${currentCycleNumber} timestamp=${new Date(pipelineStartedAt).toISOString()}`);
 
   try {
+    try {
+      const seedResult = await (options.seedCompanies || seedCompanies)();
+      if (seedResult?.failed?.length) {
+        logger.error(`Company registration incomplete: ${seedResult.failed.length} of ${seedResult.failed.length + seedResult.succeeded.length} company records failed`);
+        recordRunMetrics({ companySeedFailures: seedResult.failed.length });
+      }
+    } catch (error) {
+      logger.error(`Company registration failed; continuing with scraper execution: ${error.message}`);
+      recordRunMetrics({ companySeedFailures: 1 });
+    }
+
     const batchSize = scraperBatchSize || 50;
-    const scraperTargets = resolveScraperTargets();
+    const scraperTargets = Array.isArray(options.scraperTargets)
+      ? options.scraperTargets
+      : resolveScraperTargets();
     const effectiveScraperBatchSize = batchSize;
     const scraperSummary = {
       batchCount: 0,
@@ -105,7 +171,7 @@ async function runJobPipeline(options = {}) {
           }, timeoutMs);
 
           try {
-            scraperPromise = runScrapers([target], {
+            scraperPromise = (options.runScrapers || runScrapers)([target], {
               signal: controller.signal,
               onMetrics: (metrics) => recordRunMetrics({ scraper: metrics }),
             });
@@ -289,26 +355,25 @@ async function runJobPipeline(options = {}) {
         ...importSummary.rawJobIds,
         ...summaryRawJobIds,
       ].map(String)));
-      if (rawJobIds.length > 0) {
-        const aiWorkerBatchSize = Number(process.env.AI_WORKER_BATCH_SIZE || 5) || 5;
-        logger.info(`Running AI worker for ${rawJobIds.length} raw job(s) tracked in this execution`);
-        const workerResult = await runAiWorker({
-          batchSize: aiWorkerBatchSize,
-          rawJobIds,
-          onPublished: ({ rawJobId }) => {
-            if (rawJobId != null) recordRunMetrics({ publishedRawJobIds: [rawJobId] });
-          },
-        });
-        if (workerResult.error) {
-          recordRunMetrics({ aiWorkerFailures: 1 });
-          logger.error(`AI worker failed: ${workerResult.error.message || workerResult.error}`);
-          if (options.throwOnError) throw new Error('AI worker failed during one-shot pipeline');
-        }
-        if (workerResult.publisher?.error || workerResult.publisher?.failedCount > 0) {
-          recordRunMetrics({ aiWorkerFailures: workerResult.publisher.failedCount || 1 });
-        }
-      } else {
-        logger.info('AI worker skipped: this workflow run has no newly persisted raw jobs to process');
+      const aiWorkerBatchSize = Number(process.env.AI_WORKER_BATCH_SIZE || 5) || 5;
+      logger.info(`Running AI worker for pending queue; newly saved raw jobs in this execution: ${rawJobIds.length}`);
+      const workerResult = await runAiWorkerUntilIdle({
+        batchSize: aiWorkerBatchSize,
+        onPublished: ({ rawJobId }) => {
+          if (rawJobId != null) recordRunMetrics({ publishedRawJobIds: [rawJobId] });
+        },
+      });
+      logger.info(`AI worker batches completed: ${workerResult.batches}; processed=${workerResult.jobsCompleted}; failed=${workerResult.jobsFailed}; quarantined=${workerResult.jobsQuarantined}`);
+      if (workerResult.error) {
+        recordRunMetrics({ aiWorkerFailures: 1 });
+        logger.error(`AI worker failed: ${workerResult.error.message || workerResult.error}`);
+        if (options.throwOnError) throw new Error('AI worker failed during one-shot pipeline');
+      }
+      if (workerResult.jobsFailed > 0) {
+        recordRunMetrics({ aiWorkerFailures: workerResult.jobsFailed });
+      }
+      if (workerResult.publisher?.error || workerResult.publisher?.failedCount > 0) {
+        recordRunMetrics({ aiWorkerFailures: workerResult.publisher.failedCount || 1 });
       }
     } else if (options.runAiWorker) {
       logger.info('AI worker disabled by ENABLE_AI_WORKER=false');
@@ -408,6 +473,7 @@ function scheduleAiWorker({
 
 module.exports = {
   runJobPipeline,
+  runAiWorkerUntilIdle,
   scheduleJobs,
   scheduleAiWorker,
   resolveScraperTargets,

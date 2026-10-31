@@ -98,17 +98,8 @@ function isQueueItemReady(queueItem) {
   return Date.now() - updatedAt >= delayMs;
 }
 
-function getAIModel(providerOverride) {
-  const provider = String(providerOverride || process.env.AI_PRIMARY_PROVIDER || process.env.AI_PROVIDER || 'gemini')
-    .toLowerCase()
-    .trim();
-  if (provider === 'groq') {
-    return process.env.GROQ_MODEL || (providerOverride ? 'openai/gpt-oss-20b' : 'unknown');
-  }
-  if (provider === 'ollama') {
-    return process.env.OLLAMA_MODEL || (providerOverride ? 'gemma3:4b' : 'unknown');
-  }
-  return process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+function getAIModel() {
+  return process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
 }
 
 function mapRawJobToProcessedJob(rawJob, provider) {
@@ -152,7 +143,7 @@ function mapRawJobToProcessedJob(rawJob, provider) {
     status: rawJob.status || 'active',
     is_active: rawJob.is_active !== false,
     ai_processed: true,
-    ai_model: getAIModel(provider),
+    ai_model: getAIModel(),
     ai_processed_at: new Date().toISOString(),
   };
 }
@@ -665,22 +656,18 @@ async function runAiWorker(options = {}) {
     }));
 
     let publisherResult = null;
-    if (jobsCompleted > 0) {
-      loggerInstance.info('✓ Batch complete: publishing pending jobs once');
-      try {
-        publisherResult = await publishPendingJobs({
-          logger: loggerInstance,
-          supabase: activeSupabase,
-          rawJobIds,
-          onPublished: options.onPublished,
-        });
-        loggerInstance.info('✓ Publisher completed after batch');
-      } catch (publishError) {
-        loggerInstance.error(`Publisher failed after batch: ${publishError.message}`);
-        publisherResult = { error: publishError.message };
-      }
-    } else {
-      loggerInstance.info('No jobs completed in this batch; skipping publish step');
+    loggerInstance.info('✓ Batch complete: publishing pending processed jobs');
+    try {
+      publisherResult = await publishPendingJobs({
+        logger: loggerInstance,
+        supabase: activeSupabase,
+        rawJobIds,
+        onPublished: options.onPublished,
+      });
+      loggerInstance.info('✓ Publisher completed after batch');
+    } catch (publishError) {
+      loggerInstance.error(`Publisher failed after batch: ${publishError.message}`);
+      publisherResult = { error: publishError.message };
     }
 
     return {

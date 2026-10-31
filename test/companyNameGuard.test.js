@@ -23,7 +23,41 @@ test('fillMissingFields does not trust an unsupported source as the company name
 });
 
 test('fillMissingFields accepts supported product companies', () => {
-  for (const company of ['Zoho', 'Freshworks', 'Razorpay', 'PhonePe', 'Paytm', 'Flipkart']) {
+  for (const company of [
+    'Zoho',
+    'Freshworks',
+    'Zensar Technologies',
+    'Mastek',
+    'Cyient',
+    'Happiest Minds',
+    'Coforge',
+    'Razorpay',
+    'Hexaware Technologies',
+    'Nucleus Software',
+    'Birlasoft',
+    'PhonePe',
+    'Flipkart',
+    'Zerodha',
+    'Delhivery',
+    'Sonata Software',
+    'Sasken Technologies',
+    'L&T Technology Services',
+    'KPIT Technologies',
+    'Ather Energy',
+    'Ola Electric',
+    'MakeMyTrip',
+    'Aurionpro Solutions',
+    'Genpact',
+    'BrowserStack',
+    'Postman',
+    'Darwinbox',
+    'Whatfix',
+    'Paytm',
+    'Meesho',
+    'Swiggy',
+    'Groww',
+    'CRED',
+  ]) {
     const result = fillMissingFields({
       title: 'Senior Software Engineer',
       company: null,

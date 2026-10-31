@@ -21,10 +21,6 @@ const {
   JOB_LOOKBACK_DAYS,
   COMPANY_SCRAPER_TIMEOUT_MS,
   SCRAPER_TIMEOUT_MS,
-  AI_PRIMARY_PROVIDER,
-  AI_PROVIDER,
-  GEMINI_MODEL,
-  GEMINI_TIMEOUT,
 } = process.env;
 
 const supabaseUrl = SUPABASE_URL?.trim();
@@ -42,9 +38,6 @@ module.exports = {
   jobScrapeCron: JOB_SCRAPE_CRON || '30 22 * * *',
   scraperBatchSize: Number(SCRAPER_BATCH_SIZE) || 50,
   logLevel: LOG_LEVEL || 'info',
-  aiPrimaryProvider: AI_PRIMARY_PROVIDER || AI_PROVIDER || 'gemini',
-  geminiModel: GEMINI_MODEL || 'gemini-2.5-flash-lite',
-  geminiTimeoutMs: Number(GEMINI_TIMEOUT) || 60000,
   arbeitnowRetentionDays: Number(ARBEITNOW_RETENTION_DAYS) || 7,
   defaultRetentionDays: Number(DEFAULT_RETENTION_DAYS) || 15,
   jobLookbackDays: Number(JOB_LOOKBACK_DAYS) || 3,

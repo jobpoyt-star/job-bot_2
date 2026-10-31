@@ -38,7 +38,7 @@ test('createJobEnricher retries AI provider once after a transient initial failu
       error() {},
       debug() {},
     },
-    ollamaClient: async (prompt) => {
+    groqClient: async (prompt) => {
       if (calls.length === 0) {
         calls.push('first');
         throw new Error('transient AI failure');
@@ -78,7 +78,7 @@ test('createJobEnricher preserves existing values and only fills missing ones', 
       error() {},
       debug() {},
     },
-    ollamaClient: async (prompt) => {
+    groqClient: async (prompt) => {
       calls.push(prompt);
       return {
         title: 'Senior Engineer',
@@ -188,7 +188,7 @@ test('createJobEnricher skips AI work when the core enrichment fields already ex
       error() {},
       debug() {},
     },
-    ollamaClient: async () => {
+    groqClient: async () => {
       throw new Error('should not be called');
     },
   });

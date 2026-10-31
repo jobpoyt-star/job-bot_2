@@ -4,8 +4,6 @@ const logger = require('../utils/logger');
 const { SUPPORTED_COMPANY_NAMES } = require('../database/companyRepository');
 const { buildEnrichmentPrompt } = require('./promptBuilder');
 const { parseEnrichmentResponse } = require('./responseParser');
-const { callGemini } = require('./geminiClient');
-const { callOllama } = require('./ollamaClient');
 const { callGroq } = require('./groqClient');
 
 const APPROVED_COMPANIES = new Set(SUPPORTED_COMPANY_NAMES);
@@ -554,33 +552,6 @@ async function fetchAIResponseWithRetry(prompt, client, providerName, dependenci
   throw lastError;
 }
 
-async function enrichJobWithOllama(job, dependencies = {}) {
-  const loggerInstance = dependencies.logger || logger;
-  const ollamaClient = dependencies.ollamaClient || callOllama;
-
-  const missingFields = getFieldsRequiringAI(job);
-  if (!missingFields.length) {
-    loggerInstance.info('AI skipped: all enrichment fields already populated');
-    return mergeEnrichment(job, {});
-  }
-
-  const startTime = Date.now();
-  loggerInstance.info(`AI started for ${missingFields.join(', ')}`);
-
-  try {
-    const prompt = buildEnrichmentPrompt(job, missingFields);
-    const parsedResponse = await fetchAIResponseWithRetry(prompt, ollamaClient, 'Ollama', { ...dependencies, job });
-    const mergedJob = mergeEnrichment(job, parsedResponse);
-    const elapsedMs = Date.now() - startTime;
-    loggerInstance.info(`AI completed in ${elapsedMs}ms`);
-    return mergedJob;
-  } catch (error) {
-    const elapsedMs = Date.now() - startTime;
-    loggerInstance.warn(`AI failed after ${elapsedMs}ms: ${error.message}`);
-    throw error;
-  }
-}
-
 async function enrichJobWithGroq(job, dependencies = {}) {
   const loggerInstance = dependencies.logger || logger;
   const groqClient = dependencies.groqClient || callGroq;
@@ -608,39 +579,7 @@ async function enrichJobWithGroq(job, dependencies = {}) {
   }
 }
 
-async function enrichJobWithGemini(job, dependencies = {}) {
-  const loggerInstance = dependencies.logger || logger;
-  const geminiClient = dependencies.geminiClient || callGemini;
-
-  const missingFields = getFieldsRequiringAI(job);
-  if (!missingFields.length) {
-    loggerInstance.info('AI skipped: all enrichment fields already populated');
-    return mergeEnrichment(job, {});
-  }
-
-  const startTime = Date.now();
-  loggerInstance.info(`AI started for ${missingFields.join(', ')}`);
-
-  try {
-    const prompt = buildEnrichmentPrompt(job, missingFields);
-    const parsedResponse = await fetchAIResponseWithRetry(prompt, geminiClient, 'Gemini', {
-      ...dependencies,
-      job,
-      requireUsableResponse: true,
-      responseAttempts: 1,
-    });
-    const mergedJob = mergeEnrichment(job, parsedResponse);
-    loggerInstance.info(`AI completed in ${Date.now() - startTime}ms`);
-    return mergedJob;
-  } catch (error) {
-    loggerInstance.warn(`AI failed after ${Date.now() - startTime}ms: ${error.message}`);
-    throw error;
-  }
-}
-
 module.exports = {
-  enrichJobWithGemini,
-  enrichJobWithOllama,
   enrichJobWithGroq,
   hasMeaningfulValue,
   getMissingFields,

@@ -1,10 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createJobEnricher } = require('../src/ai');
-const { callGemini, resetGeminiRateLimitState } = require('../src/ai/geminiClient');
+const { createJobEnricher, selectAIProvider } = require('../src/ai');
 const { runAiWorker } = require('../src/workers/aiWorker');
-const { GroqQuotaError, isQuotaError } = require('../src/ai/groqClient');
+const { GroqQuotaError, callGroq, isQuotaError } = require('../src/ai/groqClient');
 
 const validResponse = JSON.stringify({
   title: 'Senior Software Engineer',
@@ -46,6 +45,119 @@ test('Groq treats HTTP 429 as a deferred quota/rate-limit error, not arbitrary H
   assert.equal(isQuotaError({ status: 429, message: 'Request failed' }), true);
   assert.equal(isQuotaError({ status: 400, message: 'Invalid request body' }), false);
   assert.equal(isQuotaError({ status: 404, message: 'Not found' }), false);
+});
+
+test('Groq rotates through configured API keys after quota and rate-limit failures', async () => {
+  const attemptedKeys = [];
+  const keys = ['primary', 'secondary-2', 'secondary-3', 'secondary-4'];
+  const response = await callGroq('prompt', {
+    apiKeys: keys,
+    createClient: ({ apiKey }) => {
+      attemptedKeys.push(apiKey);
+      return {
+        chat: {
+          completions: {
+            async create() {
+              if (apiKey !== 'secondary-4') {
+                const error = new Error('rate limited');
+                error.status = 429;
+                throw error;
+              }
+              return { choices: [{ message: { content: 'valid response' } }] };
+            },
+          },
+        },
+      };
+    },
+  });
+
+  assert.equal(response, 'valid response');
+  assert.deepEqual(attemptedKeys, keys);
+});
+
+test('Groq loads primary and numbered backup keys from environment configuration', async () => {
+  const names = ['GROQ_API_KEY', 'GROQ_API_KEY_2', 'GROQ_API_KEY_3', 'GROQ_API_KEY_4'];
+  const originalValues = names.map((name) => process.env[name]);
+  const expectedKeys = ['test-primary', 'test-secondary-2', 'test-secondary-3', 'test-secondary-4'];
+  const attemptedKeys = [];
+  names.forEach((name, index) => {
+    process.env[name] = expectedKeys[index];
+  });
+
+  try {
+    const response = await callGroq('prompt', {
+      createClient: ({ apiKey }) => ({
+        chat: {
+          completions: {
+            async create() {
+              attemptedKeys.push(apiKey);
+              if (apiKey !== expectedKeys[3]) {
+                const error = new Error('rate limited');
+                error.status = 429;
+                throw error;
+              }
+              return { choices: [{ message: { content: 'valid response' } }] };
+            },
+          },
+        },
+      }),
+    });
+    assert.equal(response, 'valid response');
+    assert.deepEqual(attemptedKeys, expectedKeys);
+  } finally {
+    names.forEach((name, index) => {
+      if (originalValues[index] === undefined) delete process.env[name];
+      else process.env[name] = originalValues[index];
+    });
+  }
+});
+
+test('Groq keeps its bounded same-key retry before moving on to another key', async () => {
+  const attemptedKeys = [];
+  const response = await callGroq('prompt', {
+    apiKeys: ['primary', 'secondary'],
+    createClient: ({ apiKey }) => ({
+      chat: {
+        completions: {
+          async create() {
+            attemptedKeys.push(apiKey);
+            if (apiKey === 'primary') {
+              const error = new Error('temporary connection reset');
+              error.code = 'ECONNRESET';
+              throw error;
+            }
+            return { choices: [{ message: { content: 'valid response' } }] };
+          },
+        },
+      },
+    }),
+  });
+
+  assert.equal(response, 'valid response');
+  assert.deepEqual(attemptedKeys, ['primary', 'primary', 'secondary']);
+});
+
+test('Groq reports quota exhaustion only after all configured keys are rate limited', async () => {
+  const attemptedKeys = [];
+  await assert.rejects(
+    callGroq('prompt', {
+      apiKeys: ['primary', 'secondary'],
+      createClient: ({ apiKey }) => ({
+        chat: {
+          completions: {
+            async create() {
+              attemptedKeys.push(apiKey);
+              const error = new Error('rate limited');
+              error.status = 429;
+              throw error;
+            },
+          },
+        },
+      }),
+    }),
+    (error) => error instanceof GroqQuotaError && error.isQuotaError === true
+  );
+  assert.deepEqual(attemptedKeys, ['primary', 'secondary']);
 });
 
 function makeWorkerSupabase(rawJob = jobNeedingEnrichment) {
@@ -127,92 +239,21 @@ function makeWorkerSupabase(rawJob = jobNeedingEnrichment) {
   };
 }
 
-test('Gemini succeeds without calling Groq', async () => {
-  let groqCalls = 0;
-  const enrich = createJobEnricher({
-    provider: 'gemini',
-    logger: quietLogger(),
-    geminiClient: async () => validResponse,
-    groqClient: async () => {
-      groqCalls += 1;
-      return validResponse;
-    },
-  });
-
-  const result = await enrich(jobNeedingEnrichment);
-
-  assert.equal(result.title, 'Senior Software Engineer');
-  assert.equal(groqCalls, 0);
-});
-
-test('Gemini HTTP 429 falls back to Groq', async () => {
-  const calls = [];
-  const enrich = createJobEnricher({
-    provider: 'gemini',
-    logger: quietLogger(),
-    geminiClient: async () => {
-      calls.push('gemini');
-      const error = new Error('rate limited');
-      error.status = 429;
-      throw error;
-    },
-    groqClient: async () => {
-      calls.push('groq');
-      return validResponse;
-    },
-  });
-
-  await enrich(jobNeedingEnrichment);
-  assert.deepEqual(calls, ['gemini', 'groq']);
-});
-
-test('Gemini timeout falls back to Groq', async () => {
-  const calls = [];
-  const enrich = createJobEnricher({
-    provider: 'gemini',
-    logger: quietLogger(),
-    geminiClient: async () => {
-      calls.push('gemini');
-      const error = new Error('request timed out');
-      error.isAiTimeout = true;
-      throw error;
-    },
-    groqClient: async () => {
-      calls.push('groq');
-      return validResponse;
-    },
-  });
-
-  await enrich(jobNeedingEnrichment);
-  assert.deepEqual(calls, ['gemini', 'groq']);
-});
-
-test('malformed Gemini output is rejected by the parser and retried through Groq', async () => {
-  let groqCalls = 0;
-  const enrich = createJobEnricher({
-    provider: 'gemini',
-    logger: quietLogger(),
-    geminiClient: async () => 'not valid JSON',
-    groqClient: async () => {
-      groqCalls += 1;
-      return validResponse;
-    },
-  });
-
-  const result = await enrich(jobNeedingEnrichment);
-  assert.equal(groqCalls, 1);
-  assert.equal(result.title, 'Senior Software Engineer');
-});
-
-test('missing Gemini key falls back safely to configured Groq', async () => {
-  const originalKey = process.env.GEMINI_API_KEY;
-  delete process.env.GEMINI_API_KEY;
+test('AI enrichment always uses Groq, even when Gemini is explicitly requested', async () => {
+  const originalProvider = process.env.AI_PRIMARY_PROVIDER;
+  process.env.AI_PRIMARY_PROVIDER = 'gemini';
+  let geminiCalls = 0;
   let groqCalls = 0;
 
   try {
+    assert.equal(selectAIProvider(), 'groq');
     const enrich = createJobEnricher({
       provider: 'gemini',
       logger: quietLogger(),
+      geminiClient: async () => {
+        geminiCalls += 1;
+        return validResponse;
+      },
       groqClient: async () => {
         groqCalls += 1;
         return validResponse;
@@ -220,86 +261,21 @@ test('missing Gemini key falls back safely to configured Groq', async () => {
     });
 
     const result = await enrich(jobNeedingEnrichment);
+
     assert.equal(result.title, 'Senior Software Engineer');
     assert.equal(groqCalls, 1);
+    assert.equal(geminiCalls, 0);
   } finally {
-    if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
-    else process.env.GEMINI_API_KEY = originalKey;
+    if (originalProvider === undefined) delete process.env.AI_PRIMARY_PROVIDER;
+    else process.env.AI_PRIMARY_PROVIDER = originalProvider;
   }
 });
 
-test('Gemini retries transient timeouts only within its bounded retry policy', async () => {
-  const originalKey = process.env.GEMINI_API_KEY;
-  process.env.GEMINI_API_KEY = 'test-key';
-  resetGeminiRateLimitState();
-  let calls = 0;
-
-  try {
-    const text = await callGemini('prompt', {
-      client: {
-        models: {
-          async generateContent() {
-            calls += 1;
-            if (calls === 1) {
-              const error = new Error('request timeout');
-              error.isAiTimeout = true;
-              throw error;
-            }
-            return { text: 'valid response' };
-          },
-        },
-      },
-      requestIntervalMs: 0,
-      sleep: async () => {},
-      random: () => 0,
-    });
-
-    assert.equal(text, 'valid response');
-    assert.equal(calls, 2);
-  } finally {
-    if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
-    else process.env.GEMINI_API_KEY = originalKey;
-    resetGeminiRateLimitState();
-  }
-});
-
-test('Gemini honors Retry-After through a cooldown instead of retrying a 429', async () => {
-  const originalKey = process.env.GEMINI_API_KEY;
-  process.env.GEMINI_API_KEY = 'test-key';
-  resetGeminiRateLimitState();
-  let calls = 0;
-
-  try {
-    const client = {
-      models: {
-        async generateContent() {
-          calls += 1;
-          const error = new Error('rate limited');
-          error.status = 429;
-          error.headers = { 'retry-after': '60' };
-          throw error;
-        },
-      },
-    };
-
-    await assert.rejects(callGemini('prompt', { client, requestIntervalMs: 0 }), /HTTP 429/);
-    await assert.rejects(callGemini('prompt', { client, requestIntervalMs: 0 }), /HTTP 429/);
-    assert.equal(calls, 1);
-  } finally {
-    if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
-    else process.env.GEMINI_API_KEY = originalKey;
-    resetGeminiRateLimitState();
-  }
-});
-
-test('both provider failures preserve the worker queue retry behavior', async () => {
+test('Groq failures preserve the worker queue retry behavior', async () => {
   const fakeSupabase = makeWorkerSupabase();
   const enrich = createJobEnricher({
-    provider: 'gemini',
+    provider: 'groq',
     logger: quietLogger(),
-    geminiClient: async () => {
-      throw new Error('Gemini unavailable');
-    },
     groqClient: async () => {
       throw new Error('Groq unavailable');
     },
@@ -320,11 +296,8 @@ test('both provider failures preserve the worker queue retry behavior', async ()
 test('provider quota failures remain Pending with backoff instead of being abandoned', async () => {
   const fakeSupabase = makeWorkerSupabase();
   const enrich = createJobEnricher({
-    provider: 'gemini',
+    provider: 'groq',
     logger: quietLogger(),
-    geminiClient: async () => {
-      throw new Error('Gemini unavailable');
-    },
     groqClient: async () => {
       throw new GroqQuotaError('quota exhausted');
     },
@@ -345,16 +318,11 @@ test('provider quota failures remain Pending with backoff instead of being aband
   assert.equal(fakeSupabase.queueUpdates.some((payload) => payload.status === 'Failed'), false);
 });
 
-test('fallback saves only one processed enrichment for a job', async () => {
+test('Groq saves one processed enrichment for a job', async () => {
   const fakeSupabase = makeWorkerSupabase();
   const enrich = createJobEnricher({
-    provider: 'gemini',
+    provider: 'groq',
     logger: quietLogger(),
-    geminiClient: async () => {
-      const error = new Error('rate limited');
-      error.status = 429;
-      throw error;
-    },
     groqClient: async () => validResponse,
   });
 
@@ -378,12 +346,8 @@ test('AI worker quarantines legacy foreign jobs before calling any provider', as
   });
   let providerCalls = 0;
   const enrich = createJobEnricher({
-    provider: 'gemini',
+    provider: 'groq',
     logger: quietLogger(),
-    geminiClient: async () => {
-      providerCalls += 1;
-      return validResponse;
-    },
     groqClient: async () => {
       providerCalls += 1;
       return validResponse;
@@ -448,11 +412,8 @@ test('AI worker debug reprocessing refuses jobs outside India before enrichment'
 test('legacy Groq quota errors retain their queue failure classification', async () => {
   const quotaError = new GroqQuotaError('quota exhausted');
   const enrich = createJobEnricher({
-    provider: 'gemini',
+    provider: 'groq',
     logger: quietLogger(),
-    geminiClient: async () => {
-      throw new Error('Gemini unavailable');
-    },
     groqClient: async () => {
       throw quotaError;
     },

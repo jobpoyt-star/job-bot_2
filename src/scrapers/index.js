@@ -2,10 +2,26 @@ const logger = require('../utils/logger');
 const { filterJobsWithinRecentCutoff } = require('../utils/recentJobPolicy');
 const { scrapeCompanyJobs } = require('./companyScraper');
 const { scrapeFreshworksJobs } = require('./freshworks');
+const { scrapeZohoJobs } = require('./zoho');
+const { scrapeMastekJobs } = require('./mastek');
+const { scrapeBirlasoftJobs } = require('./birlasoft');
+const { scrapeDelhiveryJobs } = require('./delhivery');
+const { scrapeSonataJobs } = require('./sonata');
+const { scrapeSaskenJobs } = require('./sasken');
+const { scrapeLttsJobs } = require('./ltts');
+const { scrapeKpitJobs } = require('./kpit');
+const { scrapeAtherEnergyJobs } = require('./atherEnergy');
+const { scrapeAurionproJobs } = require('./aurionpro');
+const { scrapeGenpactJobs } = require('./genpact');
+const { scrapeBrowserStackJobs } = require('./browserstack');
+const { scrapePostmanJobs } = require('./postman');
+const { scrapeDarwinboxJobs } = require('./darwinbox');
+const { scrapeWhatfixJobs } = require('./whatfix');
 const productFeedScrapers = require('./verifiedProductFeeds');
 const { evaluateIndiaEligibility } = require('../parsers/common/jobFilters');
 
 const SCRAPER_REGISTRY = {
+  zoho: scrapeZohoJobs,
   freshworks: scrapeFreshworksJobs,
   razorpay: productFeedScrapers.razorpay,
   paytm: productFeedScrapers.paytm,
@@ -13,6 +29,36 @@ const SCRAPER_REGISTRY = {
   swiggy: productFeedScrapers.swiggy,
   groww: productFeedScrapers.groww,
   cred: productFeedScrapers.cred,
+  phonepe: productFeedScrapers.phonepe,
+  flipkart: productFeedScrapers.flipkart,
+  zerodha: productFeedScrapers.zerodha,
+  zensar: productFeedScrapers.zensar,
+  hexaware: productFeedScrapers.hexaware,
+  nucleus: (_query, _location, _fullSync, options) => scrapeZohoJobs(_query, _location, _fullSync, {
+    ...options,
+    company: 'Nucleus Software',
+    careersHost: 'nucleussoftware.zohorecruit.in',
+    careersUrl: 'https://nucleussoftware.zohorecruit.in/jobs/Careers',
+  }),
+  mastek: scrapeMastekJobs,
+  birlasoft: scrapeBirlasoftJobs,
+  delhivery: scrapeDelhiveryJobs,
+  sonata: scrapeSonataJobs,
+  sasken: scrapeSaskenJobs,
+  ltts: scrapeLttsJobs,
+  kpit: scrapeKpitJobs,
+  atherenergy: scrapeAtherEnergyJobs,
+  olaelectric: productFeedScrapers.olaelectric,
+  makemytrip: productFeedScrapers.makemytrip,
+  aurionpro: scrapeAurionproJobs,
+  genpact: scrapeGenpactJobs,
+  browserstack: scrapeBrowserStackJobs,
+  postman: scrapePostmanJobs,
+  darwinbox: scrapeDarwinboxJobs,
+  whatfix: scrapeWhatfixJobs,
+  cyient: productFeedScrapers.cyient,
+  happiestminds: productFeedScrapers.happiestminds,
+  coforge: productFeedScrapers.coforge,
 };
 
 const ACTIVE_SCRAPER_ORDER = Object.keys(SCRAPER_REGISTRY);
@@ -57,7 +103,11 @@ async function runScrapers(urls = [], options = {}) {
       if (registeredScraper) {
         logger.info(`Starting registered scraper for ${key}`);
         const maxJobs = Number(process.env.MAX_JOBS_PER_COMPANY_RUN) || 100;
-        const response = await registeredScraper('', '', false, { signal, maxJobs });
+        const response = await registeredScraper('', '', false, {
+          ...options,
+          signal,
+          maxJobs,
+        });
         const jobs = Array.isArray(response?.result) ? response.result.slice(0, maxJobs) : [];
         const stats = response?.stats || {
           pageCount: 0,

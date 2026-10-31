@@ -22,12 +22,13 @@ function normalizeText(value) {
 }
 
 const INDIA_LOCATION_NAMES = [
-  'ahmedabad', 'bangalore', 'bengaluru', 'bhopal', 'bhubaneswar', 'chandigarh',
+  'ahmedabad', 'bangalore', 'bengaluru', 'bhagalpur', 'bhopal', 'bhubaneswar',
+  'bhubaneshwar', 'chandigarh',
   'chennai', 'coimbatore', 'delhi ncr', 'gurgaon', 'gurugram', 'hyderabad',
-  'indore', 'jaipur', 'kanpur', 'kochi', 'kolkata', 'lucknow', 'mumbai',
-  'mysore', 'mysuru', 'nagpur', 'nashik', 'noida', 'patna', 'pune',
+  'indore', 'jaipur', 'kanpur', 'kochi', 'kolkata', 'lucknow', 'mumbai', 'bombay',
+  'hubballi', 'karnal', 'mysore', 'mysuru', 'nagpur', 'nashik', 'noida', 'patna', 'pune',
   'surat', 'thiruvananthapuram', 'trivandrum', 'vadodara', 'visakhapatnam',
-  'vizag', 'vijayawada', 'agra', 'amritsar', 'dehradun', 'faridabad',
+  'tirupati', 'vizag', 'vijayawada', 'agra', 'amritsar', 'dehradun', 'faridabad',
   'ghaziabad', 'gurugram', 'jodhpur', 'madurai', 'mangalore', 'mangaluru',
   'meerut', 'rajkot', 'ranchi', 'shimla', 'srinagar', 'udaipur', 'varanasi',
   'andhra pradesh', 'arunachal pradesh', 'assam', 'bihar', 'chhattisgarh',
@@ -181,7 +182,7 @@ function evaluateIndiaEligibility(job) {
   const indiaNamedLocation = /\bindia\b/i.test(location);
   if (indiaCountry || indiaLocation || indiaNamedLocation) {
     const persistedLocation = location
-      ? (indiaCountry && !/\bindia\b/i.test(location) ? `${location}, India` : location)
+      ? ((indiaCountry || indiaLocation) && !/\bindia\b/i.test(location) ? `${location}, India` : location)
       : 'India';
     return { eligible: true, status: 'eligible', reason: 'verified_india_location', persistedLocation };
   }

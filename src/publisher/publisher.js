@@ -88,7 +88,7 @@ function buildJobPayload(processedJob, company) {
   return {
     title: processedJob.title || null,
     company_name: company?.name || null,
-    company_logo_url: company?.logo_url || null,
+    company_logo_url: company?.company_logo_url || company?.logo_url || null,
     location: processedJob.location || 'Location Not Specified',
     job_type: normalizeJobType(processedJob.employment_type),
     work_mode: normalizeWorkMode(processedJob.work_mode),

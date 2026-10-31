@@ -13,6 +13,12 @@ test('accepts a hybrid job in Bengaluru without a country field', () => {
   assert.equal(shouldSaveJob({ location: 'Bengaluru', work_mode: 'Hybrid' }), true);
 });
 
+test('accepts Indian city aliases including Bangalore, Gurgaon, and Bombay', () => {
+  for (const location of ['Bangalore', 'Gurgaon', 'Bombay']) {
+    assert.equal(shouldSaveJob({ location, work_mode: 'Onsite' }), true);
+  }
+});
+
 test('accepts remote jobs explicitly eligible in India', () => {
   assert.equal(shouldSaveJob({ location: 'Remote - India', work_mode: 'Remote' }), true);
   assert.equal(shouldSaveJob({ location: 'Remote', work_mode: 'Remote', description: 'You may work remotely from anywhere in India.' }), true);

@@ -6,42 +6,73 @@ const logger = require('../utils/logger');
 const SUPPORTED_COMPANY_NAMES = [
   'Zoho',
   'Freshworks',
+  'Zensar Technologies',
+  'Mastek',
+  'Cyient',
+  'Happiest Minds',
+  'Coforge',
   'Razorpay',
-  'PhonePe',
+  'Hexaware Technologies',
   'Paytm',
-  'Flipkart',
   'Meesho',
   'Swiggy',
-  'Zomato',
   'Groww',
-  'Zerodha',
   'CRED',
-  'Udaan',
-  'Dream11',
+  'Nucleus Software',
+  'Birlasoft',
+  'PhonePe',
+  'Flipkart',
+  'Zerodha',
   'Delhivery',
+  'Sonata Software',
+  'Sasken Technologies',
+  'L&T Technology Services',
+  'KPIT Technologies',
   'Ather Energy',
-  'Ola',
+  'Ola Electric',
   'MakeMyTrip',
-  'Policybazaar',
-  'Practo',
+  'Aurionpro Solutions',
+  'Genpact',
+  'BrowserStack',
+  'Postman',
+  'Darwinbox',
+  'Whatfix',
 ];
 
 const DEFAULT_CAREER_URLS = {
-  zoho: 'https://www.zoho.com/careers/',
+  zoho: 'https://careers.zohocorp.com/jobs/Careers',
   freshworks: 'https://careers.smartrecruiters.com/Freshworks',
+  'zensar technologies': 'https://www.zensar.com/careers',
+  mastek: 'https://careers.mastek.com/search',
+  cyient: 'https://careers.cyient.com/cyient/',
+  'happiest minds': 'https://jobs.happiestminds.com/happiestminds/',
+  coforge: 'https://careers.coforge.com/coforge/',
   razorpay: 'https://razorpay.com/careers/',
-  phonepe: 'https://www.phonepe.com/careers/',
+  'hexaware technologies': 'https://jobs.hexaware.com/',
   paytm: 'https://paytm.com/careers/',
-  flipkart: 'https://www.flipkartcareers.com/',
   meesho: 'https://www.meesho.io/jobs',
   swiggy: 'https://careers.swiggy.in/',
   groww: 'https://groww.in/careers',
-  zerodha: 'https://careers.zerodha.com/',
   cred: 'https://careers.cred.club/',
-  delhivery: 'https://www.delhivery.com/careers/',
-  ola: 'https://www.olaelectric.com/careers',
+  'nucleus software': 'https://nucleussoftware.zohorecruit.in/jobs/Careers',
+  birlasoft: 'https://jobs.birlasoft.com/',
+  phonepe: 'https://www.phonepe.com/careers/job-openings/',
+  flipkart: 'https://www.flipkartcareers.com/',
+  zerodha: 'https://careers.zerodha.com/',
+  delhivery: 'https://www.delhivery.com/careers',
+  'sonata software': 'https://www.sonata-software.com/careers',
+  'sasken technologies': 'https://careers.sasken.com/tb/saskenjobs/',
+  'l&t technology services': 'https://www.ltts.com/careers',
+  'kpit technologies': 'https://www.kpit.com/careers-overview/',
+  'ather energy': 'https://careers.atherenergy.com/',
+  'ola electric': 'https://olacareers.turbohire.co/careerpage/e0c1eb37-eb7a-4ca4-bcc5-d59ce4ce9212',
   makemytrip: 'https://careers.makemytrip.com/',
-  practo: 'https://practo.app.param.ai/jobs/',
+  'aurionpro solutions': 'https://www.aurionpro.com/careers/',
+  genpact: 'https://www.genpact.com/careers',
+  browserstack: 'https://www.browserstack.com/careers',
+  postman: 'https://www.postman.com/company/careers/open-positions/',
+  darwinbox: 'https://www.darwinbox.com/careers',
+  whatfix: 'https://whatfix.com/careers/',
 };
 
 function getDefaultCareerUrl(name) {
@@ -64,7 +95,7 @@ async function getCompanyByName(name) {
 
   if (error) {
     logger.warn(`Company lookup failed for "${normalizedName}": ${error.message}`);
-    return null;
+    throw error;
   }
 
   return data;
@@ -84,12 +115,13 @@ async function getEnabledCompanies() {
 }
 
 async function ensureCompany(companyData) {
-  if (!companyData || !companyData.name) {
+  const name = String(companyData?.name || '').trim();
+  if (!name) {
     return null;
   }
 
   const payload = {
-    name: companyData.name.trim(),
+    name,
     enabled: companyData.enabled !== false,
     career_url: companyData.career_url || companyData.careerUrl || companyData.url || getDefaultCareerUrl(companyData.name),
   };
@@ -107,6 +139,13 @@ async function ensureCompany(companyData) {
     .maybeSingle();
 
   if (error) {
+    if (error.code === '23505') {
+      const concurrentlyCreated = await getCompanyByName(payload.name);
+      if (concurrentlyCreated) {
+        logger.info(`ensureCompany reused concurrently created company for "${payload.name}"`);
+        return concurrentlyCreated;
+      }
+    }
     logger.error(`Supabase ensureCompany failed for "${payload.name}": ${error.message}`);
     if (error.details) {
       logger.error(`Supabase ensureCompany details: ${error.details}`);
@@ -123,6 +162,7 @@ async function ensureCompany(companyData) {
 
 module.exports = {
   SUPPORTED_COMPANY_NAMES,
+  getDefaultCareerUrl,
   getCompanyByName,
   getEnabledCompanies,
   ensureCompany,

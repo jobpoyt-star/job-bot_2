@@ -52,17 +52,61 @@ test('HCLTech and TCS are not seeded or active company scraper targets', () => {
   assert.equal(SUPPORTED_COMPANY_NAMES.includes('HCLTech'), false);
   assert.equal(SUPPORTED_COMPANY_NAMES.includes('TCS'), false);
   assert.deepEqual(SUPPORTED_COMPANY_NAMES, [
-    'Zoho', 'Freshworks', 'Razorpay', 'PhonePe', 'Paytm', 'Flipkart', 'Meesho',
-    'Swiggy', 'Zomato', 'Groww', 'Zerodha', 'CRED', 'Udaan', 'Dream11',
-    'Delhivery', 'Ather Energy', 'Ola', 'MakeMyTrip', 'Policybazaar', 'Practo',
+    'Zoho', 'Freshworks', 'Zensar Technologies', 'Mastek', 'Cyient', 'Happiest Minds', 'Coforge', 'Razorpay', 'Hexaware Technologies',
+    'Paytm', 'Meesho', 'Swiggy', 'Groww', 'CRED', 'Nucleus Software',
+    'Birlasoft', 'PhonePe', 'Flipkart', 'Zerodha', 'Delhivery', 'Sonata Software', 'Sasken Technologies',
+    'L&T Technology Services', 'KPIT Technologies', 'Ather Energy', 'Ola Electric',
+    'MakeMyTrip',
+    'Aurionpro Solutions',
+    'Genpact',
+    'BrowserStack',
+    'Postman',
+    'Darwinbox',
+    'Whatfix',
   ]);
   assert.deepEqual(getRegisteredScraperKeys(), [
-    'freshworks', 'razorpay', 'paytm', 'meesho', 'swiggy', 'groww', 'cred',
+    'zoho', 'freshworks', 'razorpay', 'paytm', 'meesho', 'swiggy', 'groww', 'cred', 'phonepe', 'flipkart', 'zerodha',
+    'zensar', 'hexaware', 'nucleus',
+    'mastek',
+    'birlasoft',
+    'delhivery',
+    'sonata',
+    'sasken',
+    'ltts',
+    'kpit',
+    'atherenergy',
+    'olaelectric',
+    'makemytrip',
+    'aurionpro',
+    'genpact',
+    'browserstack',
+    'postman',
+    'darwinbox',
+    'whatfix',
+    'cyient', 'happiestminds', 'coforge',
   ]);
 });
 
-test('only sources with verified public listings feeds are active', () => {
+test('only sources with verified public listings are active', () => {
   assert.deepEqual(getRegisteredScraperKeys(), [
-    'freshworks', 'razorpay', 'paytm', 'meesho', 'swiggy', 'groww', 'cred',
+    'zoho', 'freshworks', 'razorpay', 'paytm', 'meesho', 'swiggy', 'groww', 'cred', 'phonepe', 'flipkart', 'zerodha',
+    'zensar', 'hexaware', 'nucleus',
+    'mastek',
+    'birlasoft',
+    'delhivery',
+    'sonata',
+    'sasken',
+    'ltts',
+    'kpit',
+    'atherenergy',
+    'olaelectric',
+    'makemytrip',
+    'aurionpro',
+    'genpact',
+    'browserstack',
+    'postman',
+    'darwinbox',
+    'whatfix',
+    'cyient', 'happiestminds', 'coforge',
   ]);
 });

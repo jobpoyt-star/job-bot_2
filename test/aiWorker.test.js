@@ -3,10 +3,7 @@ const assert = require('node:assert/strict');
 const { mapRawJobToProcessedJob } = require('../src/workers/aiWorker');
 
 function expectedAiModel() {
-  const provider = (process.env.AI_PRIMARY_PROVIDER || process.env.AI_PROVIDER || 'gemini').toLowerCase();
-  if (provider === 'groq') return process.env.GROQ_MODEL || 'unknown';
-  if (provider === 'ollama') return process.env.OLLAMA_MODEL || 'unknown';
-  return process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+  return process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
 }
 
 test('mapRawJobToProcessedJob maps raw job fields into processed job payload', () => {

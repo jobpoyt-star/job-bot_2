@@ -1,16 +1,12 @@
 # AI provider configuration
 
-Gemini is the default primary provider. The existing enrichment prompt, response parser, and field-merging validation are used for both providers; a Gemini error or unusable response triggers a Groq attempt. If both providers fail, the existing `ai_queue` retry and failure handling remains in effect.
+AI enrichment runs through Groq only. Configure up to four Groq API keys locally or as GitHub Actions repository secrets:
 
-Set these environment variables locally or as GitHub Actions repository secrets:
+- `GROQ_API_KEY`
+- `GROQ_API_KEY_2`
+- `GROQ_API_KEY_3`
+- `GROQ_API_KEY_4`
 
-- `GEMINI_API_KEY` (required for Gemini)
-- `GROQ_API_KEY` (required for automatic Groq fallback)
-- `GEMINI_MODEL` (optional; defaults to `gemini-2.5-flash-lite`)
-- `GEMINI_TIMEOUT` (optional timeout in milliseconds; defaults to `60000`)
+Keys are tried in order for each request. A failed request or rate limit moves processing to the next configured key. Each key's daily quota is managed independently by Groq; the application does not track or reset provider quotas. The existing `ai_queue` retry and failure handling remains in effect if all configured keys fail.
 
-`AI_PRIMARY_PROVIDER` accepts `gemini`, `groq`, or `ollama` and takes precedence when set. The legacy `AI_PROVIDER` setting is still honored when `AI_PRIMARY_PROVIDER` is unset. Ollama remains available as a selectable provider.
-
-Gemini calls are paced to one request per second per process, run with bounded transient-error retries, and use a temporary cooldown after repeated rate limits. A Gemini rate limit is not retried immediately; any `Retry-After` value is honored by the cooldown. No provider credentials should be committed to the repository.
-
-The default model is listed as a Flash-Lite model in [Google's Gemini model documentation](https://ai.google.dev/gemini-api/docs/models).
+`GROQ_MODEL` is optional and defaults to `openai/gpt-oss-20b`. No provider credentials should be committed to the repository.
